@@ -1,0 +1,44 @@
+Package: GLOWpipeline
+Type: Package
+Title: Multi-Region Orchestration for GLOW Variant-Set Scans
+Version: 0.1.0
+Date: 2026-06-13
+Authors@R: c(
+    person("Ming", "Liu", email = "mliu5@wpi.edu", role = "aut"),
+    person("Hong", "Zhang", email = "consistencyzhang@gmail.com", role = "aut"),
+    person("Zheyang", "Wu", email = "zheyangwu@wpi.edu", role = c("aut", "cre"))
+    )
+Description: Orchestration layer for genome-wide GLOW variant-set scans. Runs the
+    GLOWr single-region test over a chunk's worth of regions under an output
+    policy, splits a genome into array-task chunks, and aggregates per-chunk
+    results into a genome-wide table with significance thresholding and
+    overlapping-window locus merging. It is the counterpart of STAARpipeline in the
+    GLOWpipeline -> GLOWr -> GFisher stack; it is cohort- and cluster-agnostic
+    (resolved objects in, tables out) so a workflow script binds it to data.
+URL: https://zwulab.github.io/GLOWpipeline/, https://github.com/ZWuLab/GLOWpipeline
+BugReports: https://github.com/ZWuLab/GLOWpipeline/issues
+License: GPL-3
+Encoding: UTF-8
+Depends: R (>= 3.5.0)
+Imports: GLOWr,
+    SeqArray,
+    grDevices,
+    graphics,
+    stats,
+    utils
+Suggests: STAAR,
+    fst,
+    testthat (>= 3.0.0),
+    gdsfmt,
+    SNPRelate,
+    withr,
+    knitr,
+    rmarkdown
+Remotes: ZWuLab/GLOWr,
+    ZWuLab/GFisher,
+    xihaoli/STAAR
+VignetteBuilder: knitr
+biocViews: StatisticalMethod, GenomeWideAssociation, SNP, Genetics, Sequencing, WholeGenome
+RoxygenNote: 7.3.3
+Config/testthat/edition: 3
+Roxygen: list(markdown = TRUE)

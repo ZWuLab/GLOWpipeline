@@ -1,0 +1,10 @@
+^benchmarks$
+^cran-comments\.md$
+^\.github$
+^_pkgdown\.yml$
+^docs$
+^AI-USE\.md$
+^\.release-exclude$
+^\.release-source$
+^vignettes/.*\.html$
+^LICENSE\.md$

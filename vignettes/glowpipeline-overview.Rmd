@@ -1,0 +1,177 @@
+---
+title: "GLOWpipeline: Orchestrating a Genome-Wide GLOW Scan"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{GLOWpipeline: Orchestrating a Genome-Wide GLOW Scan}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Introduction
+
+**GLOWpipeline** is the orchestration-and-summary layer of the GLOW software
+family. The methods layer, [GLOWr](https://github.com/ZWuLab/GLOWr), provides the
+single-region variant-set test (`GLOWr::glow_region_test()`); GLOWpipeline scales
+that single-region test up to a genome-wide scan and turns the per-region output into
+genome-wide tables and diagnostics. It is the STAARpipeline analog in the
+GLOWpipeline -> GLOWr -> GFisher stack.
+
+A genome-wide GLOW scan has four conceptual phases:
+
+1. **Set up** the shared inputs once (`prepare_scan_run()`).
+2. **Chunk** the genome into array tasks (`define_genome_chunks()`).
+3. **Scan** each chunk's windows with GLOW (`glow_scan_chunk()` /
+   `run_scan_unit()`), typically one compute-cluster array task per chunk.
+4. **Aggregate and summarize** the per-chunk outputs into a genome-wide table
+   (`aggregate_scan_results()`) with diagnostics
+   (`summarize_qq_and_lambdas()`).
+
+GLOWpipeline is deliberately cohort- and cluster-agnostic: resolved objects go
+in, tables come out. A workflow script binds it to a dataset and a
+scheduler. This vignette shows the call shapes; the data-dependent steps are not
+evaluated here (they need a GDS file and a fitted null model), while the two
+self-contained steps run for real.
+
+```{r load, eval=FALSE}
+library(GLOWpipeline)
+```
+
+```{r load-real, include=FALSE}
+library(GLOWpipeline)
+```
+
+## 1. Set up the run
+
+`prepare_scan_run()` resolves the parts of a run that every chunk task shares --
+the fitted null model, the optimal-weight inputs, and the output directories --
+so the work is done once rather than per task. It takes a resolved `config` list
+and an `output_dir`.
+
+```{r prepare, eval=FALSE}
+spine <- prepare_scan_run(
+  config     = config,        # resolved analysis config (cohort + method knobs)
+  output_dir = "scan_out",
+  chroms     = 1:22
+)
+```
+
+The returned setup carries the null model and weight inputs that the scan
+consumes in phase 3.
+
+## 2. Chunk the genome
+
+`define_genome_chunks()` splits a set of chromosome spans into contiguous
+sliding-window chunks. Each row is one chunk -- one compute-cluster array task --
+mapping an array index to a chromosome and a contiguous run of window start
+positions. The boundary rule guarantees the union of all chunks' windows equals
+one full-span slide with no duplicates and no gaps.
+
+This step is self-contained, so we run it for real on a small two-chromosome
+example:
+
+```{r chunks}
+chrom_spans <- data.frame(
+  chr   = c("21", "22"),
+  start = c(5010000L, 10510000L),
+  end   = c(48120000L, 50810000L)
+)
+
+chunks <- define_genome_chunks(
+  chrom_spans,
+  window_size    = 2000,
+  step_size      = 1000,
+  chunk_strategy = "fixed_mb",
+  chunk_size_mb  = 5
+)
+
+nrow(chunks)
+head(chunks)
+```
+
+Each chunk's `chunk_id` is the value an array task reads (e.g. from
+`SLURM_ARRAY_TASK_ID`) to learn which chromosome and window range it owns.
+
+## 3. Scan one chunk
+
+An output policy declares which artifacts the scan writes. The flat
+per-window results table is always on; the heavier per-window evidence, STAAR
+detail, and result objects default off. This constructor is self-contained:
+
+```{r policy}
+policy <- glow_output_policy()
+policy
+```
+
+With the spine, a chunk's window range, and the policy in hand, `run_scan_unit()`
+builds the chunk's regions and filters and runs `glow_scan_chunk()` over them,
+persisting the results. In a cluster job this is the per-array-task call:
+
+```{r scan, eval=FALSE}
+# `gds_path` and the null-model / weight inputs come from the shared setup.
+run_scan_unit(
+  gds_path          = gds_path,
+  null_model        = spine$null_model,
+  pi_models         = spine$pi_models,
+  pi_features       = spine$pi_features,
+  reference_medians = spine$reference_medians,
+  region_type       = "window",
+  config            = config,
+  output_dir        = "scan_out"
+)
+```
+
+`glow_scan_chunk()` returns a list whose `results` element is the flat
+per-window table (one row per non-skipped window, with the window coordinates,
+variant counts, and the GLOW test p-values).
+
+## 4. Aggregate and summarize
+
+After all chunk tasks finish, `aggregate_scan_results()` concatenates the
+per-chunk result files into a single genome-wide table (ordered by chromosome
+then position), flags significant windows against a Bonferroni-style threshold,
+and merges overlapping significant windows into loci.
+
+```{r aggregate, eval=FALSE}
+agg <- aggregate_scan_results(
+  chunk_files  = chunk_files,    # the per-chunk result files written in phase 3
+  primary_test = "GLOW_Omni",
+  alpha        = 0.05
+)
+
+agg$scan_results_all   # genome-wide flat table (all tested windows)
+agg$scan_sig_windows   # the significant windows
+```
+
+For a gene-centric coding scan, `aggregate_coding_results()` is the analog.
+
+Genomic-control diagnostics come from `summarize_qq_and_lambdas()`, which
+computes per-test lambda values and writes QQ plots:
+
+```{r diagnostics, eval=FALSE}
+summarize_qq_and_lambdas(
+  df           = agg$scan_results_all,
+  label        = "genome",
+  output_dir   = "scan_out",
+  test_columns = c("GLOW_Burden", "GLOW_SKAT", "GLOW_Omni"),
+  omni_test    = "GLOW_Omni"
+)
+```
+
+Run completeness, run-log parsing, and per-error variant drill-downs are
+available via `check_scan_completeness()`, `parse_chr_log()` /
+`parse_chunk_log()`, and `write_error_drilldowns()`.
+
+## Where to go next
+
+- Function help: `?define_genome_chunks`, `?glow_scan_chunk`, `?run_scan_unit`,
+  `?aggregate_scan_results`, `?prepare_scan_run`.
+- The methods layer: the [GLOWr](https://github.com/ZWuLab/GLOWr) package
+  (`?GLOWr::glow_region_test`) and its vignettes for fitting the null model and
+  estimating the optimal-weight inputs.

@@ -1,0 +1,46 @@
+# Hand-maintained NAMESPACE.
+#
+# roxygen2::roxygenise()/devtools::document() cannot regenerate this in the
+# project's `r_env` conda environment (stale `stringi` binary vs libicu.so.78),
+# so exports/imports are maintained by hand until that is rebuilt. Keep this in
+# sync with the roxygen @export/@importFrom tags in R/*.R. Mirrors the same
+# hand-edit workaround used for GLOWr's NAMESPACE (see GLOWr Phase-1 File Log).
+
+export(aggregate_coding_results)
+export(aggregate_scan_results)
+export(build_lambda_table_md)
+export(build_scan_regions)
+export(check_scan_completeness)
+export(define_genome_chunks)
+export(ensure_shared_output_dir)
+export(gc_calibration_fields)
+export(glow_output_policy)
+export(glow_scan_chunk)
+export(load_config_snapshot)
+export(load_evidence_for_chrs)
+export(parse_chr_log)
+export(parse_chunk_log)
+export(prepare_scan_run)
+export(read_all_chr_results)
+export(run_scan_unit)
+export(summarize_qq_and_lambdas)
+export(write_error_drilldowns)
+S3method(print,glow_output_policy)
+importFrom(GLOWr,compute_lambda_gc)
+importFrom(GLOWr,extract_variant_set)
+importFrom(GLOWr,glow_region_test)
+importFrom(GLOWr,plot_qq)
+importFrom(SeqArray,seqClose)
+importFrom(SeqArray,seqOpen)
+importFrom(grDevices,dev.off)
+importFrom(grDevices,hcl.colors)
+importFrom(grDevices,pdf)
+importFrom(graphics,abline)
+importFrom(graphics,legend)
+importFrom(graphics,mtext)
+importFrom(graphics,par)
+importFrom(graphics,plot)
+importFrom(graphics,points)
+importFrom(stats,na.omit)
+importFrom(stats,setNames)
+importFrom(stats,var)
