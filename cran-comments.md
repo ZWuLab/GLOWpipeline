@@ -1,12 +1,12 @@
-# cran-comments for GLOWpipeline 0.1.0
+# cran-comments for GLOWpipeline 0.1.1
 
 ## Test environment
 - R 4.3.3 on x86_64-conda-linux-gnu
-- check command: `R CMD check --as-cran --no-manual`
-- NOTE: no LaTeX (pdflatex) was available in this environment, so the PDF manual was not built (`--no-manual`). The Rd files themselves pass all Rd checks; the PDF manual builds on a LaTeX-equipped machine (e.g. CRAN).
+- check command: `R CMD check --as-cran`
+- LaTeX present: full manual check ran.
 
 ## R CMD check results
-- 0 ERROR | 0 WARNING | 2 NOTE
+- 0 ERROR | 0 WARNING | 3 NOTE
 
 - No ERRORs.
 
@@ -25,4 +25,10 @@ Unknown, possibly misspelled, fields in DESCRIPTION:
 ```
 * checking for future file timestamps ... NOTE
 unable to verify current time
+```
+
+```
+* checking HTML version of manual ... NOTE
+Skipping checking HTML validation: no command 'tidy' found
+Skipping checking math rendering: package 'V8' unavailable
 ```

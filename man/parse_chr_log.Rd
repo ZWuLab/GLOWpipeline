@@ -30,4 +30,18 @@ accepts both \code{"(\\d+) coding genes"} and \code{"(\\d+) genes"}. Each
 error line's optional leading word (\code{"STAAR ERROR in ..."} vs the bare
 \code{"ERROR in ..."} main-pipeline catch-all) is parsed into the
 \code{source} column; an absent prefix is labelled \code{"GLOW"}.
+
+Two per-chr summary vocabularies are accepted: the legacy
+\code{"Done. genes_attempted=..."} line (pre-2026-06 inline driver) and the
+\code{run_scan_unit} line \code{"Done gene unit chrN. n=..., n_ok=...,
+n_skip_empty=..., n_staar_skip_single=..., n_error=..., <t>s"}, mapped as
+\code{n} \eqn{\to} \code{attempted} (and \code{gene_list_n} when no
+gene-list line exists), \code{n_ok + n_staar_skip_single} \eqn{\to}
+\code{results}, \code{n_skip_empty} \eqn{\to} \code{skipped},
+\code{n_error} \eqn{\to} \code{errors}. \code{results} counts the result
+rows the unit wrote: \code{glow_scan_chunk()} appends a row for a
+\code{staar_skip_single} gene as well as for an \code{ok} one, because
+such a gene has its GLOW result and only the STAAR sub-step was skipped.
+The identity \code{attempted == results + skipped + errors} therefore holds
+for both vocabularies.
 }

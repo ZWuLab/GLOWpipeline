@@ -44,6 +44,23 @@ test_that("parse_chr_log accepts the bare '(\\d+) genes' wording", {
   expect_equal(parse_chr_log(p)$summary$gene_list_n, 42L)
 })
 
+test_that("parse_chr_log parses the run_scan_unit 'Done gene unit' vocabulary", {
+  p <- write_chr_log(c(
+    "[ts] n_samples = 48198",
+    "[ts] trait = binary",
+    "[ts] Filter: rare_maf_cutoff=0.5, variant_type=SNV, min_variants=1",
+    "[ts] Done gene unit chr5. n=427, n_ok=306, n_skip_empty=67, n_staar_skip_single=54, n_error=0, 689.2s"
+  ))
+  s <- parse_chr_log(p)$summary
+  expect_equal(s$gene_list_n, 427L)   # unit count stands in for the absent gene-list line
+  expect_equal(s$attempted, 427L)
+  expect_equal(s$results, 360L)       # n_ok + n_staar_skip_single: both statuses write a row
+  expect_equal(s$skipped, 67L)
+  expect_equal(s$attempted, s$results + s$skipped + s$errors)   # the legacy identity holds
+  expect_equal(s$errors, 0L)
+  expect_equal(s$runtime_sec, 689.2)
+})
+
 test_that("parse_chr_log NA-fills when there is no Done line", {
   p <- write_chr_log(c("[ts] n_samples = 10"))
   s <- parse_chr_log(p)$summary

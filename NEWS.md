@@ -1,3 +1,19 @@
+# GLOWpipeline 0.1.1
+
+- `parse_chr_log()` now reads the per-chromosome summary line written by
+  `run_scan_unit()` (`"Done gene unit chrN. n=..., n_ok=..., n_skip_empty=...,
+  n_staar_skip_single=..., n_error=..., <t>s"`), in addition to the legacy
+  `"Done. genes_attempted=..."` line it already understood. The 2026-06 scan
+  unification replaced the legacy line, after which the parser filled every
+  count with `NA` on current logs, and a downstream summation over those counts
+  failed. Counts map as `n` to `attempted` (and to `gene_list_n` when no
+  gene-list line is present), `n_ok + n_staar_skip_single` to `results`,
+  `n_skip_empty` to `skipped`, `n_error` to `errors`, and the trailing seconds
+  to `runtime_sec`. `results` is the number of result rows the unit wrote: a
+  gene whose STAAR sub-step was skipped still has its GLOW result and its row,
+  so `attempted == results + skipped + errors` holds as it did for the legacy
+  line. Legacy logs parse exactly as before.
+
 # GLOWpipeline 0.1.0
 
 Initial public release.

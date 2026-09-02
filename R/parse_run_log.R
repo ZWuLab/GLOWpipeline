@@ -28,6 +28,20 @@
 #' \code{"ERROR in ..."} main-pipeline catch-all) is parsed into the
 #' \code{source} column; an absent prefix is labelled \code{"GLOW"}.
 #'
+#' Two per-chr summary vocabularies are accepted: the legacy
+#' \code{"Done. genes_attempted=..."} line (pre-2026-06 inline driver) and the
+#' \code{run_scan_unit} line \code{"Done gene unit chrN. n=..., n_ok=...,
+#' n_skip_empty=..., n_staar_skip_single=..., n_error=..., <t>s"}, mapped as
+#' \code{n} \eqn{\to} \code{attempted} (and \code{gene_list_n} when no
+#' gene-list line exists), \code{n_ok + n_staar_skip_single} \eqn{\to}
+#' \code{results}, \code{n_skip_empty} \eqn{\to} \code{skipped},
+#' \code{n_error} \eqn{\to} \code{errors}. \code{results} counts the result
+#' rows the unit wrote: \code{glow_scan_chunk()} appends a row for a
+#' \code{staar_skip_single} gene as well as for an \code{ok} one, because
+#' such a gene has its GLOW result and only the STAAR sub-step was skipped.
+#' The identity \code{attempted == results + skipped + errors} therefore holds
+#' for both vocabularies.
+#'
 #' @param log_path Character. Path to a \code{log_chrN.txt} file.
 #'
 #' @return A list with:
@@ -69,18 +83,39 @@ parse_chr_log <- function(log_path) {
   filter_line <- pull("(Filter:.*)$")
 
   done_line <- grep("Done\\. genes_attempted=", lines, value = TRUE)
-  if (length(done_line) == 0L) {
-    # Run did not complete; surface NAs so callers can detect
-    attempted <- NA_integer_; results <- NA_integer_
-    skipped   <- NA_integer_; errors  <- NA_integer_
-    runtime   <- NA_real_
-  } else {
+  # run_scan_unit-era logs (2026-06 unification) end with
+  # "Done gene unit chrN. n=427, n_ok=306, n_skip_empty=67,
+  #  n_staar_skip_single=54, n_error=0, 689.2s" instead of the legacy line.
+  unit_line <- grep("Done gene unit chr\\d+\\. n=", lines, value = TRUE)
+  if (length(done_line) >= 1L) {
     attempted <- as.integer(sub(".*genes_attempted=(\\d+).*", "\\1",
                                  done_line[1L]))
     results   <- as.integer(sub(".*results=(\\d+).*",   "\\1", done_line[1L]))
     skipped   <- as.integer(sub(".*skipped=(\\d+).*",   "\\1", done_line[1L]))
     errors    <- as.integer(sub(".*errors=(\\d+).*",    "\\1", done_line[1L]))
     runtime   <- as.numeric(sub(".*runtime=([0-9.]+)s.*", "\\1", done_line[1L]))
+  } else if (length(unit_line) >= 1L) {
+    u <- unit_line[1L]
+    # n -> attempted; n_skip_empty -> skipped; n_error -> errors; trailing
+    # seconds -> runtime. `results` is the number of result ROWS the unit
+    # wrote, which is n_ok + n_staar_skip_single: glow_scan_chunk() appends a
+    # row for both statuses (a staar_skip_single gene has its GLOW result and
+    # only the STAAR sub-step was skipped). This keeps the legacy identity
+    # attempted == results + skipped + errors, as the legacy line did.
+    attempted <- as.integer(sub(".*Done gene unit chr\\d+\\. n=(\\d+).*", "\\1", u))
+    n_ok      <- as.integer(sub(".*n_ok=(\\d+).*",                "\\1", u))
+    n_sss     <- as.integer(sub(".*n_staar_skip_single=(\\d+).*", "\\1", u))
+    results   <- n_ok + n_sss
+    skipped   <- as.integer(sub(".*n_skip_empty=(\\d+).*", "\\1", u))
+    errors    <- as.integer(sub(".*n_error=(\\d+).*",      "\\1", u))
+    runtime   <- as.numeric(sub(".*,\\s*([0-9.]+)s\\s*$",  "\\1", u))
+    # This era has no "Gene list (chrN): ..." line; the unit count is the list.
+    if (is.na(gene_list_n)) gene_list_n <- attempted
+  } else {
+    # Run did not complete; surface NAs so callers can detect
+    attempted <- NA_integer_; results <- NA_integer_
+    skipped   <- NA_integer_; errors  <- NA_integer_
+    runtime   <- NA_real_
   }
 
   err_lines <- grep("ERROR in", lines, value = TRUE)
