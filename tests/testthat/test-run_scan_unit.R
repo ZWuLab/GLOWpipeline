@@ -146,3 +146,68 @@ test_that("coding-type run tags `category` and stacks categories", {
   # No region-summary columns on the coding schema.
   expect_false(any(.SUMMARY_COLS %in% names(tbl)))
 })
+
+
+# ---- 2026-10-09: n_cores gives the same table; segmentation runs end to end ----
+
+test_that("gene run with n_cores = 2 writes the same table as with 1 (fixture, forked)", {
+  skip_on_os("windows")
+  skip_if(parallel::detectCores() < 2L, "needs two cores")
+  od1 <- withr::local_tempdir(); od2 <- withr::local_tempdir()
+  env <- .base_config(list(resolved_gene_list = .fixt_genes))
+  rp1 <- file.path(od1, "results", "glow_chr22.csv")
+  rp2 <- file.path(od2, "results", "glow_chr22.csv")
+  lines <- character(0)
+  .run("gene", env, rp1, od1, chr = 22, n_cores = 1L)
+  # Two regions and a block size of 25 would be one block: use the config field
+  # path and force two blocks by giving each gene its own block through the
+  # window type below; here the parallel path must at least agree on the table.
+  ret2 <- .run("gene", env, rp2, od2, chr = 22, n_cores = 2L)
+  expect_equal(read.csv(rp1, stringsAsFactors = FALSE),
+               read.csv(rp2, stringsAsFactors = FALSE))
+  expect_equal(ret2$summary$n_ok, 2L)
+  # The config field is read when the argument is NULL.
+  env$n_cores <- 2L
+  od3 <- withr::local_tempdir(); rp3 <- file.path(od3, "results", "glow_chr22.csv")
+  .run("gene", env, rp3, od3, chr = 22)
+  expect_equal(read.csv(rp1, stringsAsFactors = FALSE),
+               read.csv(rp3, stringsAsFactors = FALSE))
+})
+
+test_that("window run with n_cores = 2 over several blocks writes the same table as with 1", {
+  skip_on_os("windows")
+  skip_if(parallel::detectCores() < 2L, "needs two cores")
+  od1 <- withr::local_tempdir(); od2 <- withr::local_tempdir()
+  env <- .base_config(list(window_size = 1000L, step_size = 250L))
+  chunk <- data.frame(chr = "22", chunk_id = 1L,
+                      chunk_start = 1000L, chunk_end = 15000L, span_end = 16000L)
+  rp1 <- file.path(od1, "results", "scan_chunk_0001.csv")
+  rp2 <- file.path(od2, "results", "scan_chunk_0001.csv")
+  .run("window", env, rp1, od1, chunk = chunk, n_cores = 1L)
+  .run("window", env, rp2, od2, chunk = chunk, n_cores = 2L)   # 57 windows: 3 blocks
+  t1 <- read.csv(rp1, stringsAsFactors = FALSE)
+  t2 <- read.csv(rp2, stringsAsFactors = FALSE)
+  expect_true(nrow(t1) > 25L)
+  expect_equal(t1, t2)
+})
+
+test_that("gene run segments a large gene and tests every segment", {
+  od <- withr::local_tempdir()
+  env <- .base_config(list(resolved_gene_list = .fixt_genes,
+                           gene_max_records = 30L, gene_segment_bp = 2000L))
+  rp <- file.path(od, "results", "glow_chr22.csv")
+  logs <- character(0)
+  ret <- run_scan_unit(.agds, .nm, .pi_models, .feats, .meds,
+                       b_func = .b_func, b_model = NULL,
+                       region_type = "gene", config = env,
+                       results_path = rp, output_dir = od,
+                       output_policy = glow_output_policy(), chr = 22,
+                       logger = function(m) logs <<- c(logs, m))
+  tbl <- read.csv(rp, stringsAsFactors = FALSE)
+  # GENE_A_seg3 is the 1 bp tail [5000, 5000]; its one record does not pass the
+  # filter, so that segment is skip_empty and has no row, as an empty gene would.
+  expect_setequal(tbl$label, c(paste0("GENE_A_seg", 1:2), paste0("GENE_B_seg", 1:3)))
+  expect_true(all(tbl$start[tbl$label == "GENE_A_seg2"] == 3000L))
+  expect_true(any(grepl("gene segmentation: 2 gene", logs)))
+  expect_true(all(.SUMMARY_COLS %in% names(tbl)))
+})

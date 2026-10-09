@@ -4,7 +4,13 @@
 \alias{build_scan_regions}
 \title{Build the Regions Table and Filter(s) for One Scan Unit}
 \usage{
-build_scan_regions(region_type, chr, config, chunk = NULL)
+build_scan_regions(
+  region_type,
+  chr,
+  config,
+  chunk = NULL,
+  variant_index = NULL
+)
 }
 \arguments{
 \item{region_type}{Character: one of \code{"gene"}, \code{"window"},
@@ -20,6 +26,10 @@ used per type: \code{filter_spec} (all); \code{resolved_gene_list}
 \item{chunk}{A single-row data.frame (one row of the genome-chunk table) for
 \code{region_type = "window"}; ignored otherwise. Must carry
 \code{chunk_start}, \code{chunk_end}, \code{span_end}. Default NULL.}
+
+\item{variant_index}{A \code{glow_variant_index} of the unit's GDS from
+\code{GLOWr::build_variant_index()}, or NULL (default). Used only by
+\code{region_type = "gene"}, for the large-gene segmentation below.}
 }
 \value{
 A named list:
@@ -69,6 +79,26 @@ mapping labels to a builtin name OR a list of custom DNF annotation clauses
 \code{filter_spec}). The MAF/MAC/min-variant axes come from
 \code{config$filter_spec} so a category never hardcodes them.
 }
+\section{Large-gene segmentation (gene)}{
+
+At whole-genome-sequencing density a gene body can hold tens of thousands
+of records, and the per-gene cost and memory grow with the square of the
+variant count. When \code{variant_index} is supplied and
+\code{config$gene_max_records} is a finite number, every gene's GDS records
+inside its span are counted from the index (before any filter, so the count
+depends only on the file), and a gene with more records than that is
+replaced by non-overlapping segments of \code{config$gene_segment_bp} base
+pairs (default 10,000) that start at the gene start; the last segment ends
+at the gene end. Each segment is its own region row with the gene's
+\code{region_id}, its own \code{start} and \code{end}, and
+\code{label = <gene label>_seg<k>}, and it is tested and reported like a
+gene; there is no gene-level combination of the segments. A gene whose span
+fits one segment is left as it is. The returned table then also carries
+\code{n_records} (the index count of each row) and the attributes
+\code{n_genes_segmented} and \code{n_segments}. With \code{variant_index}
+NULL, or \code{gene_max_records} NULL or infinite, nothing is segmented.
+}
+
 \examples{
 \dontrun{
 env <- new.env(); source("runs/myrun/config.R", local = env)

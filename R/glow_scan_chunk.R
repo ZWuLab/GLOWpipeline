@@ -122,6 +122,12 @@
 #' @param progress_callback Optional function(msg) taking the formatted
 #'   progress string. Default NULL routes to [message()]. Pass a logger (e.g.
 #'   the workflow's `log_msg`) to write progress into the run's per-chunk log.
+#' @param variant_index A \code{glow_variant_index} for \code{gds_path} from
+#'   \code{GLOWr::build_variant_index()}, or NULL (default), in which case the
+#'   engine builds it once after opening the GDS. Every region's lookup uses
+#'   it (see \code{GLOWr::extract_variant_set()}); a caller that already holds
+#'   the index for this file (as \code{\link{run_scan_unit}} does) passes it
+#'   to avoid a second build.
 #' @param verbose Integer (default 0). Threaded to the single-region test.
 #'
 #' @return A list with:
@@ -165,6 +171,7 @@ glow_scan_chunk <- function(gds_path, regions,
                             staar_context = NULL,
                             progress_every = 0L,
                             progress_callback = NULL,
+                            variant_index = NULL,
                             verbose = 0) {
 
   t0 <- proc.time()[["elapsed"]]
@@ -226,15 +233,25 @@ glow_scan_chunk <- function(gds_path, regions,
   if (!is.null(progress_callback) && !is.function(progress_callback)) {
     stop("`progress_callback` must be a function(msg) or NULL.", call. = FALSE)
   }
+  if (!is.null(variant_index) && !inherits(variant_index, "glow_variant_index")) {
+    stop("`variant_index` must be a glow_variant_index from ",
+         "GLOWr::build_variant_index(), or NULL.", call. = FALSE)
+  }
   emit_progress <- if (progress_every > 0L) {
     fn <- if (is.null(progress_callback)) function(msg) message(msg)
           else progress_callback
     function(i, n) fn(sprintf("progress: %d/%d windows", i, n))
   } else NULL
 
-  # ---- 1. Open the GDS once for the whole chunk ----
-  gds <- seqOpen(gds_path, readonly = TRUE)
+  # ---- 1. Open the GDS once for the whole chunk, and index it once ----
+  # allow.duplicate: under run_scan_unit(n_cores > 1) this runs in a forked
+  # worker that inherits the parent's open files, and gdsfmt refuses a second
+  # open of the same file otherwise. Read-only either way.
+  gds <- seqOpen(gds_path, readonly = TRUE, allow.duplicate = TRUE)
   on.exit(seqClose(gds), add = TRUE)
+  # The index (positions, ids, file positions, read once) is what makes each
+  # region's lookup two binary searches instead of a read of the chromosome.
+  if (is.null(variant_index)) variant_index <- GLOWr::build_variant_index(gds)
 
   # ---- 2. Loop windows ----
   n_windows <- nrow(regions)
@@ -262,6 +279,7 @@ glow_scan_chunk <- function(gds_path, regions,
       staar = staar_context,
       return_evidence = isTRUE(output_policy$write_evidence),
       region_summary = region_summary,
+      variant_index = variant_index,
       verbose = verbose
     )
 

@@ -20,6 +20,8 @@
 #
 # INTERNAL HELPER FUNCTIONS:
 #   - .bsr_get()                  Read one config field from an env/list.
+#   - .segment_large_genes()      Tile genes above gene_max_records into
+#                                 gene_segment_bp segments (region_type gene).
 #   - .resolve_category_filter()  One category spec -> a glow_variant_filter
 #                                 (builtin name -> coding_filter; DNF clauses ->
 #                                 variant_filter), applying the run's filter_spec.
@@ -76,6 +78,27 @@
 #' @param chunk A single-row data.frame (one row of the genome-chunk table) for
 #'   \code{region_type = "window"}; ignored otherwise. Must carry
 #'   \code{chunk_start}, \code{chunk_end}, \code{span_end}. Default NULL.
+#' @param variant_index A \code{glow_variant_index} of the unit's GDS from
+#'   \code{GLOWr::build_variant_index()}, or NULL (default). Used only by
+#'   \code{region_type = "gene"}, for the large-gene segmentation below.
+#'
+#' @section Large-gene segmentation (gene):
+#' At whole-genome-sequencing density a gene body can hold tens of thousands
+#' of records, and the per-gene cost and memory grow with the square of the
+#' variant count. When \code{variant_index} is supplied and
+#' \code{config$gene_max_records} is a finite number, every gene's GDS records
+#' inside its span are counted from the index (before any filter, so the count
+#' depends only on the file), and a gene with more records than that is
+#' replaced by non-overlapping segments of \code{config$gene_segment_bp} base
+#' pairs (default 10,000) that start at the gene start; the last segment ends
+#' at the gene end. Each segment is its own region row with the gene's
+#' \code{region_id}, its own \code{start} and \code{end}, and
+#' \code{label = <gene label>_seg<k>}, and it is tested and reported like a
+#' gene; there is no gene-level combination of the segments. A gene whose span
+#' fits one segment is left as it is. The returned table then also carries
+#' \code{n_records} (the index count of each row) and the attributes
+#' \code{n_genes_segmented} and \code{n_segments}. With \code{variant_index}
+#' NULL, or \code{gene_max_records} NULL or infinite, nothing is segmented.
 #'
 #' @return A named list:
 #'   \describe{
@@ -104,7 +127,8 @@
 #'   \code{GLOWr::variant_filter}, \code{GLOWr::coding_filter},
 #'   \code{\link{run_scan_unit}}
 #' @export
-build_scan_regions <- function(region_type, chr, config, chunk = NULL) {
+build_scan_regions <- function(region_type, chr, config, chunk = NULL,
+                               variant_index = NULL) {
 
   region_type <- match.arg(region_type, c("gene", "window", "coding"))
   filter_spec <- .bsr_get(config, "filter_spec")
@@ -125,6 +149,16 @@ build_scan_regions <- function(region_type, chr, config, chunk = NULL) {
       rownames(regions) <- NULL
     } else {
       regions <- GLOWr::define_regions_gene(chr = as.character(chr))
+    }
+    # Large-gene segmentation (see the roxygen section): needs the index and a
+    # finite threshold; otherwise the gene table is returned as built.
+    gene_max_records <- .bsr_get(config, "gene_max_records")
+    if (!is.null(variant_index) && !is.null(gene_max_records) &&
+        is.finite(gene_max_records)) {
+      gene_segment_bp <- .bsr_get(config, "gene_segment_bp")
+      if (is.null(gene_segment_bp)) gene_segment_bp <- 10000L
+      regions <- .segment_large_genes(regions, variant_index,
+                                      gene_max_records, gene_segment_bp)
     }
     filters <- do.call(GLOWr::variant_filter, filter_spec)
     return(list(regions = regions, filters = filters))
@@ -201,6 +235,68 @@ build_scan_regions <- function(region_type, chr, config, chunk = NULL) {
     stop("`config` must be an environment or a named list.")
   }
 }
+
+#' Tile Genes Above a Record Count Into Fixed-Length Segments
+#'
+#' Counts the GDS records in each gene's span from the variant index and
+#' replaces every gene above \code{gene_max_records} by non-overlapping
+#' segments of \code{gene_segment_bp} from the gene start (the last one ends
+#' at the gene end). Segment rows keep the gene's \code{region_id} and carry
+#' \code{label = <label>_seg<k>}. The result carries \code{n_records} per row
+#' and the attributes \code{n_genes_segmented} and \code{n_segments}.
+#'
+#' @param regions The gene table (\code{region_id, chr, start, end, label}).
+#' @param variant_index A \code{glow_variant_index}.
+#' @param gene_max_records Numeric threshold on the record count.
+#' @param gene_segment_bp Integer segment length in base pairs.
+#' @return The regions table, segmented where needed, in genomic order.
+#' @keywords internal
+#' @noRd
+.segment_large_genes <- function(regions, variant_index, gene_max_records,
+                                 gene_segment_bp) {
+  if (!inherits(variant_index, "glow_variant_index")) {
+    stop("`variant_index` must be a glow_variant_index from ",
+         "GLOWr::build_variant_index().", call. = FALSE)
+  }
+  gene_segment_bp <- as.integer(gene_segment_bp)
+  if (is.na(gene_segment_bp) || gene_segment_bp < 1L) {
+    stop("`config$gene_segment_bp` must be a positive integer (base pairs).",
+         call. = FALSE)
+  }
+  if (nrow(regions) == 0L) {
+    regions$n_records <- integer(0)
+    attr(regions, "n_genes_segmented") <- 0L
+    attr(regions, "n_segments") <- 0L
+    return(regions)
+  }
+  n_rec <- GLOWr::count_index_records(variant_index, regions$chr,
+                                      regions$start, regions$end)
+  span  <- regions$end - regions$start + 1L
+  split_gene <- n_rec > gene_max_records & span > gene_segment_bp
+
+  rows <- lapply(seq_len(nrow(regions)), function(i) {
+    r <- regions[i, , drop = FALSE]
+    if (!split_gene[i]) {
+      r$n_records <- n_rec[i]
+      return(r)
+    }
+    starts <- seq.int(r$start, r$end, by = gene_segment_bp)
+    ends   <- pmin(starts + gene_segment_bp - 1L, r$end)
+    seg <- r[rep(1L, length(starts)), , drop = FALSE]
+    seg$start <- as.integer(starts)
+    seg$end   <- as.integer(ends)
+    seg$label <- sprintf("%s_seg%d", r$label, seq_along(starts))
+    seg$n_records <- GLOWr::count_index_records(variant_index, seg$chr,
+                                                seg$start, seg$end)
+    seg
+  })
+  out <- do.call(rbind, rows)
+  rownames(out) <- NULL
+  attr(out, "n_genes_segmented") <- sum(split_gene)
+  attr(out, "n_segments") <- sum(vapply(rows[split_gene], nrow, integer(1)))
+  out
+}
+
 
 #' Resolve One Category Spec to a glow_variant_filter
 #'

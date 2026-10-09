@@ -237,3 +237,44 @@ test_that("the b_model_path arm loads the model and checksums the path", {
   expect_equal(bnd$base_snapshot$b_model_path, .psr_b_path)
   expect_match(unname(bnd$checksums$b_model_path), "^[0-9a-f]{32}$")
 })
+
+
+
+# ---- .psr_check_qc_node(): missing QC values (a VCF FILTER of ".") ----
+
+# A three-variant VCF converted with SeqArray; returns the GDS path.
+.psr_vcf_gds <- function(filters) {
+  vcf <- tempfile(fileext = ".vcf")
+  writeLines(c("##fileformat=VCFv4.2", "##contig=<ID=22>",
+               '##FILTER=<ID=LowQual,Description="Low quality">',
+               '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2",
+               sprintf("22\t%d\trs%d\tA\tG\t.\t%s\t.\tGT\t0/1\t0/0",
+                       c(100L, 200L, 300L), 1:3, filters)), vcf)
+  out <- tempfile(fileext = ".gds")
+  SeqArray::seqVCF2GDS(vcf, out, verbose = FALSE)
+  unlink(vcf)
+  out
+}
+
+test_that(".psr_check_qc_node() is silent when no QC value is missing", {
+  expect_silent(res <- GLOWpipeline:::.psr_check_qc_node(c("22" = .psr_gds),
+                                                          qc_label = "annotation/filter"))
+  expect_equal(res$n_missing_qc, 0L)
+})
+
+test_that(".psr_check_qc_node() warns with the counts when some QC values are missing", {
+  g <- .psr_vcf_gds(c(".", "PASS", "LowQual"))
+  on.exit(unlink(g), add = TRUE)
+  expect_warning(res <- GLOWpipeline:::.psr_check_qc_node(c("22" = g), qc_label = "annotation/filter"),
+                 "1 variant\\(s\\) have a missing value")
+  expect_equal(res$n_variants, 3L)
+  expect_equal(res$n_missing_qc, 1L)
+})
+
+test_that(".psr_check_qc_node() stops when every QC value of a chromosome is missing", {
+  g <- .psr_vcf_gds(c(".", ".", "."))
+  on.exit(unlink(g), add = TRUE)
+  expect_error(GLOWpipeline:::.psr_check_qc_node(c("22" = g), qc_label = "annotation/filter"),
+               "Every variant on chr 22")
+})

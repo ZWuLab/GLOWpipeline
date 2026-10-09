@@ -303,3 +303,23 @@ test_that("invalid use_spa is rejected before opening the GDS", {
   expect_error(.scan(.reg_ok3, use_spa = c(TRUE, FALSE)), "use_spa")
   expect_error(.scan(.reg_ok3, use_spa = NA),             "use_spa")
 })
+
+
+# ---- 2026-10-09: a prebuilt variant index gives the same results ----
+
+test_that("a prebuilt variant_index gives identical results, and a wrong one errors early", {
+  idx <- GLOWr::build_variant_index(.agds)
+  a <- .scan(.reg_mix)
+  b <- glow_scan_chunk(.agds, .reg_mix, .nm, .pi_models, .feats, .meds,
+                       b_func = .b_func, filter_spec = .spec,
+                       ld_threshold = 0.95, mac_threshold = 11L,
+                       collapse_method = "mean", output_policy = glow_output_policy(),
+                       variant_index = idx, verbose = 0)
+  expect_equal(a$results, b$results)
+  expect_equal(a$summary$n_ok, b$summary$n_ok)
+  expect_error(
+    glow_scan_chunk(.agds, .reg_mix, .nm, .pi_models, .feats, .meds,
+                    b_func = .b_func, filter_spec = .spec,
+                    output_policy = glow_output_policy(), variant_index = list()),
+    "glow_variant_index")
+})

@@ -145,3 +145,51 @@ test_that("filter_spec is required and region_type is validated", {
   env$filter_spec <- .fs
   expect_error(build_scan_regions("nonsense", chr = 22, config = env))
 })
+
+
+# ---- 2026-10-09: large-gene segmentation (gene) ----
+
+test_that("gene segmentation tiles genes above gene_max_records into gene_segment_bp segments", {
+  agds <- tempfile(fileext = ".gds")
+  create_test_agds(agds)
+  withr::defer(unlink(agds))
+  idx <- GLOWr::build_variant_index(agds)
+  # The fixture: GENE_A 40 records in [1000, 5000], GENE_B 40 in [10000, 15000],
+  # GENE_C 30 in [20000, 25000], GENE_D 10 in [30000, 32000].
+  gl <- data.frame(
+    region_id = c("GENE_A", "GENE_B", "GENE_C", "GENE_D"), chr = "22",
+    start = c(1000L, 10000L, 20000L, 30000L), end = c(5000L, 15000L, 25000L, 32000L),
+    label = c("GENE_A", "GENE_B", "GENE_C", "GENE_D"), stringsAsFactors = FALSE)
+  env <- new.env(); env$filter_spec <- .fs; env$resolved_gene_list <- gl
+  env$gene_max_records <- 30L; env$gene_segment_bp <- 2000L
+
+  out <- build_scan_regions("gene", chr = 22, config = env, variant_index = idx)
+  r <- out$regions
+  expect_true("n_records" %in% names(r))
+  expect_equal(attr(r, "n_genes_segmented"), 2L)   # GENE_A and GENE_B (40 > 30)
+  expect_equal(attr(r, "n_segments"), 6L)          # 3 + 3
+  expect_equal(nrow(r), 8L)                        # 6 segments + GENE_C + GENE_D
+  a <- r[r$region_id == "GENE_A", ]
+  expect_equal(a$label, paste0("GENE_A_seg", 1:3))
+  expect_equal(a$start, c(1000L, 3000L, 5000L))    # non-overlapping, from the gene start
+  expect_equal(a$end,   c(2999L, 4999L, 5000L))    # the last ends at the gene end
+  expect_equal(sum(a$n_records), 40L)              # every record in exactly one segment
+  expect_equal(r$n_records[r$label == "GENE_C"], 30L)   # 30 is not above 30: unsplit
+  expect_equal(r$label[r$region_id == "GENE_D"], "GENE_D")
+  expect_s3_class(out$filters, "glow_variant_filter")
+
+  # Threshold off (Inf) or no index: the old table, no n_records column.
+  env$gene_max_records <- Inf
+  r_inf <- build_scan_regions("gene", chr = 22, config = env, variant_index = idx)$regions
+  expect_false("n_records" %in% names(r_inf))
+  expect_equal(r_inf$label, gl$label)
+  env$gene_max_records <- 30L
+  r_noidx <- build_scan_regions("gene", chr = 22, config = env)$regions
+  expect_equal(r_noidx$label, gl$label)
+
+  # A gene whose span fits one segment is not split even above the threshold.
+  env$gene_segment_bp <- 10000L
+  r_big <- build_scan_regions("gene", chr = 22, config = env, variant_index = idx)$regions
+  expect_equal(r_big$label, gl$label)
+  expect_equal(attr(r_big, "n_genes_segmented"), 0L)
+})

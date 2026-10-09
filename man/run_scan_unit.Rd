@@ -26,6 +26,7 @@ run_scan_unit(
   max_regions = NA_integer_,
   progress_every = 0L,
   logger = NULL,
+  n_cores = NULL,
   verbose = 0
 )
 }
@@ -79,6 +80,18 @@ parallel). Default NA.}
 \item{logger}{A \code{function(msg)} for log lines, or NULL (silent). Default
 NULL.}
 
+\item{n_cores}{Integer or NULL (default). Forked workers for this unit. NULL
+reads \code{config$n_cores} and falls back to 1. With more than one, the
+regions are split into blocks of 25 consecutive regions, each block runs
+\code{\link{glow_scan_chunk}} in a forked worker with its own GDS handle
+(\code{parallel::mclapply}, dynamic scheduling so a block with a large
+gene does not hold the others), and the block outputs are merged in block
+order, so the written table equals the single-core one. The progress
+callback is off inside the workers; the parent logs one line per finished
+block. Forking is unavailable on Windows (a value above 1 warns and runs
+serially). Memory scales with the workers, since each holds its own
+genotype and LD matrices.}
+
 \item{verbose}{Integer threaded to the engine. Default 0.}
 }
 \value{
@@ -120,6 +133,15 @@ written under \code{output_dir} into their own on-demand folders, only when
 both the policy flag is on and the scan engine
 produced the artifact (so no orphan/empty folders).
 }
+\section{Large genes}{
+
+For \code{region_type = "gene"} the unit's variant index is passed to
+\code{\link{build_scan_regions}}, which tiles every gene with more GDS
+records than \code{config$gene_max_records} into segments of
+\code{config$gene_segment_bp} (see that function). The log states how many
+genes were segmented and into how many segments.
+}
+
 \examples{
 \dontrun{
 bundle <- prepare_scan_run(env, "runs/myrun/outputs", chroms = 22L)

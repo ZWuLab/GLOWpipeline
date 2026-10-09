@@ -228,6 +228,17 @@ prepare_scan_run <- function(config, output_dir, chroms = 1:22,
     stop("Missing per-chr GDS files:\n  ", paste(missing_gds, collapse = "\n  "))
   }
 
+  # ---- QC-node check: missing QC values (a VCF FILTER of ".") count as not passing ----
+  # GLOWr >= 0.2.1 excludes a variant whose QC value is NA instead of stopping the
+  # region. Count those variants up front, so that a run built from a VCF never
+  # loses them silently: a warning with the per-chromosome counts, and a stop when
+  # a chromosome would contribute no variant at all.
+  if (!is.null(filter_spec)) {
+    .psr_check_qc_node(gds_files,
+                       qc_label = .psr_null_or(filter_spec$qc_label, "annotation/filter"),
+                       verbose = verbose)
+  }
+
   # ---- Load prepared phenotype/covariate data ----
   prep <- readRDS(pheno_path)
   if (verbose >= 1L)
@@ -480,3 +491,58 @@ ensure_shared_output_dir <- function(output_dir, share_root = NULL, verbose = 0)
 #' @keywords internal
 #' @noRd
 .psr_null_or <- function(a, b) if (is.null(a)) b else a
+
+
+
+#' Count the variants whose QC value is missing, per chromosome
+#'
+#' \code{SeqArray::seqVCF2GDS()} stores a VCF \code{FILTER} of \code{"."}
+#' (filters not applied) as \code{NA}. GLOWr's variant filter (0.2.1 and later)
+#' treats such a value as not passing, so a run silently loses those variants
+#' unless it is told. This helper reads the QC node of every per-chromosome GDS
+#' before anything is fitted. A GDS without the node passes every variant (the
+#' GLOWr fallback) and counts as 0. A chromosome whose QC values are all missing
+#' would contribute no variant at all, so it stops the run. Any other missing
+#' count is reported as a warning.
+#'
+#' @param gds_files Named (by chromosome) character vector of per-chr GDS paths.
+#' @param qc_label Character GDS node path of the QC status (the filter spec's
+#'   \code{qc_label}, default \code{"annotation/filter"}).
+#' @param verbose Integer. At 1 or more, a one-line confirmation when nothing is missing.
+#'
+#' @return Invisibly, a \code{data.frame} with \code{chr}, \code{n_variants} and
+#'   \code{n_missing_qc}, one row per chromosome.
+#' @keywords internal
+#' @noRd
+.psr_check_qc_node <- function(gds_files, qc_label = "annotation/filter", verbose = 0) {
+  counts <- lapply(names(gds_files), function(chr) {
+    g <- SeqArray::seqOpen(gds_files[[chr]], readonly = TRUE)
+    on.exit(SeqArray::seqClose(g), add = TRUE)
+    n  <- length(SeqArray::seqGetData(g, "variant.id"))
+    qc <- tryCatch(SeqArray::seqGetData(g, qc_label), error = function(e) NULL)
+    data.frame(chr = chr, n_variants = n,
+               n_missing_qc = if (is.null(qc)) 0L else sum(is.na(qc)),
+               stringsAsFactors = FALSE)
+  })
+  counts <- do.call(rbind, counts)
+  all_missing <- counts$n_variants > 0L & counts$n_missing_qc == counts$n_variants
+  if (any(all_missing)) {
+    stop("Every variant on chr ", paste(counts$chr[all_missing], collapse = ", "),
+         " has a missing value in `", qc_label, "` (a VCF FILTER of \".\"), so no variant ",
+         "would pass QC. If the VCF was not filtered, set FILTER to PASS when converting it ",
+         "to GDS, or point `filter_spec$qc_label` at a node that carries the QC status.",
+         call. = FALSE)
+  }
+  some <- counts$n_missing_qc > 0L
+  if (any(some)) {
+    warning(sprintf(paste0("%d variant(s) have a missing value in `%s` (a VCF FILTER of \".\") ",
+                           "and are excluded from every set: %s"),
+                    sum(counts$n_missing_qc), qc_label,
+                    paste(sprintf("chr%s %d of %d", counts$chr[some], counts$n_missing_qc[some],
+                                  counts$n_variants[some]), collapse = "; ")),
+            call. = FALSE)
+  } else if (verbose >= 1L) {
+    cat("QC node `", qc_label, "`: no missing values\n", sep = "")
+  }
+  invisible(counts)
+}

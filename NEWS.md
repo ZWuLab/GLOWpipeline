@@ -1,3 +1,29 @@
+# GLOWpipeline 0.1.2
+
+Requires GLOWr 0.2.3.
+
+- **Large-gene segmentation.** For `region_type = "gene"`, `build_scan_regions()` counts the
+  GDS records in each gene's span from the unit's variant index and tiles every gene above
+  `config$gene_max_records` (10,000 in the GLOWanalyses defaults) into non-overlapping
+  segments of `config$gene_segment_bp` (default 10,000 bp) from the gene start. Each segment is
+  its own row, labeled `<gene>_seg<k>`, tested and reported like a gene, with no gene-level
+  combination. This is how the GLOW methodology paper handled genes above 1,000 variants. The
+  count is taken before any filter, so the split depends only on the file. Without a threshold
+  or an index nothing is segmented. `run_scan_unit()` logs how many genes were tiled.
+- **The variant index, built once per unit.** `run_scan_unit()` builds GLOWr's variant index
+  for its GDS and passes it to `build_scan_regions()` and `glow_scan_chunk()`, which also
+  accepts it as `variant_index` (and builds one itself otherwise), so no region re-reads the
+  chromosome's variant table. Results are unchanged.
+- **`n_cores`** in `run_scan_unit()` (argument, else `config$n_cores`, default 1): the unit's
+  regions run in blocks of 25 on forked workers, each with its own GDS handle, and the block
+  outputs are merged in order, so the written table equals the single-core one. For one task
+  per chromosome on a cloud platform. Not available on Windows.
+- `prepare_scan_run()` counts the variants whose QC value is missing (`NA` in the
+  `qc_label` node, which is how `SeqArray::seqVCF2GDS()` stores a VCF `FILTER` of
+  `"."`) before anything is fitted. GLOWr 0.2.1 excludes such variants instead of
+  stopping the region, so the run now warns with the per-chromosome counts, and
+  stops when a chromosome would contribute no variant at all.
+
 # GLOWpipeline 0.1.1
 
 - `parse_chr_log()` now reads the per-chromosome summary line written by

@@ -24,6 +24,7 @@ glow_scan_chunk(
   staar_context = NULL,
   progress_every = 0L,
   progress_callback = NULL,
+  variant_index = NULL,
   verbose = 0
 )
 }
@@ -72,6 +73,13 @@ chunks where a silent log otherwise looks indistinguishable from a hang.}
 \item{progress_callback}{Optional function(msg) taking the formatted
 progress string. Default NULL routes to \code{\link[=message]{message()}}. Pass a logger (e.g.
 the workflow's \code{log_msg}) to write progress into the run's per-chunk log.}
+
+\item{variant_index}{A \code{glow_variant_index} for \code{gds_path} from
+\code{GLOWr::build_variant_index()}, or NULL (default), in which case the
+engine builds it once after opening the GDS. Every region's lookup uses
+it (see \code{GLOWr::extract_variant_set()}); a caller that already holds
+the index for this file (as \code{\link{run_scan_unit}} does) passes it
+to avoid a second build.}
 
 \item{verbose}{Integer (default 0). Threaded to the single-region test.}
 }

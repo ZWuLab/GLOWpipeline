@@ -1,8 +1,8 @@
 Package: GLOWpipeline
 Type: Package
 Title: Multi-Region Orchestration for GLOW Variant-Set Scans
-Version: 0.1.1
-Date: 2026-09-02
+Version: 0.1.2
+Date: 2026-10-09
 Authors@R: c(
     person("Ming", "Liu", email = "mliu5@wpi.edu", role = "aut"),
     person("Hong", "Zhang", email = "consistencyzhang@gmail.com", role = "aut"),
@@ -24,6 +24,7 @@ Imports: GLOWr,
     SeqArray,
     grDevices,
     graphics,
+    parallel,
     stats,
     utils
 Suggests: STAAR,
