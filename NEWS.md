@@ -1,3 +1,19 @@
+# GLOWpipeline 0.2.1
+
+Requires GLOWr 0.3.0.
+
+- **The GLOW methods paper is published.** `citation("GLOWpipeline")` and the README cite
+  Zhang, Liu, Landers and Wu (2026), The Annals of Applied Statistics 20(3), 2074-2097,
+  doi:10.1214/26-AOAS2223, in place of "in revision". Documentation only.
+- **The package check passes without GLOWr's optional promoter-mask packages.** One test
+  of `build_scan_regions("noncoding")` built the eight default masks and so needed
+  `GenomicFeatures` and `TxDb.Hsapiens.UCSC.hg38.knownGene`, which a plain `R CMD check`
+  does not install; the public check of 0.2.0 failed on that test. The test now asserts
+  the eight masks when the two packages are present and the named error when they are
+  absent, and the two packages are listed as suggested, as GLOWr lists them, so that a
+  check environment installs them and the promoter masks are exercised there too. No code
+  change.
+
 # GLOWpipeline 0.2.0
 
 Requires GLOWr 0.3.0.

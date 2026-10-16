@@ -223,10 +223,20 @@ test_that("noncoding requires gds_path, returns per-mask regions and filters, ho
   # ncRNA genes planted in the fixture.
   expect_equal(nrow(out$regions$upstream), 0L)
   expect_equal(out$regions$ncRNA$label, c("POTEH-AS1", "LINC01297"))
-  # The default is the eight masks; an unknown name stops.
+  # The default is the eight masks. The two promoter masks need GLOWr's suggested
+  # packages; without them the default stops naming the package (this is the
+  # state of a plain R CMD check run, where only the declared dependencies exist).
   env$noncoding_categories <- NULL
-  out8 <- build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds)
-  expect_equal(names(out8$regions), GLOWr::noncoding_masks())
+  has_promoter_pkgs <- requireNamespace("GenomicFeatures", quietly = TRUE) &&
+    requireNamespace("TxDb.Hsapiens.UCSC.hg38.knownGene", quietly = TRUE)
+  if (has_promoter_pkgs) {
+    out8 <- build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds)
+    expect_equal(names(out8$regions), GLOWr::noncoding_masks())
+  } else {
+    expect_error(build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds),
+                 "GenomicFeatures|TxDb")
+  }
+  # An unknown name stops.
   env$noncoding_categories <- c("upstream", "plof")
   expect_error(build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds),
                "noncoding_categories")

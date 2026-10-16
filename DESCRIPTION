@@ -1,7 +1,7 @@
 Package: GLOWpipeline
 Type: Package
 Title: Multi-Region Orchestration for GLOW Variant-Set Scans
-Version: 0.2.0
+Version: 0.2.1
 Date: 2026-10-16
 Authors@R: c(
     person("Ming", "Liu", email = "mliu5@wpi.edu", role = "aut"),
@@ -34,7 +34,9 @@ Suggests: STAAR,
     SNPRelate,
     withr,
     knitr,
-    rmarkdown
+    rmarkdown,
+    GenomicFeatures,
+    TxDb.Hsapiens.UCSC.hg38.knownGene
 Remotes: ZWuLab/GLOWr,
     ZWuLab/GFisher,
     xihaoli/STAAR

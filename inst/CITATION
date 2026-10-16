@@ -1,24 +1,28 @@
 # inst/CITATION for GLOWpipeline.
 #
-# The GLOW methodology manuscript is in revision at the Annals of Applied
-# Statistics; there is no published volume/year/DOI yet. Cite the manuscript via
-# the Unpublished entry below. When it is published, replace this entry with the
-# Article citation (do NOT add a fabricated journal volume / year / DOI here).
+# The GLOW methodology paper, published in The Annals of Applied Statistics,
+# volume 20, issue 3 (2026), pages 2074-2097, doi:10.1214/26-AOAS2223. The
+# bibliographic details are those of the Crossref record of the DOI.
 
 citHeader("To cite GLOWpipeline in publications use:")
 
 bibentry(
-  bibtype = "Unpublished",
-  title   = "Integrated Weighted Association Test with Application to Genetic Association Studies",
-  author  = c(person("Hong", "Zhang"),
-              person("Ming", "Liu"),
-              person("J. E.", "Landers"),
-              person("Zheyang", "Wu")),
-  note    = "Manuscript in revision, Annals of Applied Statistics",
-  year    = "2026",
+  bibtype  = "Article",
+  title    = "Integrated weighted association test with application to genetic association studies",
+  author   = c(person("Hong", "Zhang"),
+               person("Ming", "Liu"),
+               person("John E.", "Landers"),
+               person("Zheyang", "Wu")),
+  journal  = "The Annals of Applied Statistics",
+  year     = "2026",
+  volume   = "20",
+  number   = "3",
+  pages    = "2074--2097",
+  doi      = "10.1214/26-AOAS2223",
   textVersion = paste(
-    "Zhang, H., Liu, M., Landers, J. E., and Wu, Z.",
-    "Integrated Weighted Association Test with Application to Genetic Association Studies.",
-    "Manuscript in revision, Annals of Applied Statistics."
+    "Zhang, H., Liu, M., Landers, J. E., and Wu, Z. (2026).",
+    "Integrated weighted association test with application to genetic association studies.",
+    "The Annals of Applied Statistics, 20(3), 2074-2097.",
+    "doi:10.1214/26-AOAS2223"
   )
 )
