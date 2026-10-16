@@ -21,8 +21,10 @@
 #
 # EXPORTED FUNCTIONS:
 #   - aggregate_coding_results()  3-source assembly + merge + significance
+#   - noncoding_gene_anchor()     The gene anchor that orders a non-coding table
 #
 # INTERNAL HELPER FUNCTIONS:
+#   - .acr_read_errors()          rbind the per-chr error CSVs when present
 #   - .acr_assert_same_schema()   Refuse to rbind tables whose column sets drift
 #   - .acr_read_glow_chr()        rbind the GLOW per-chr CSVs + rename *_glowG
 #   - .acr_read_native()          rbind one native mode's per array-task CSVs
@@ -110,8 +112,32 @@
 #' @param allow_partial Logical (default \code{FALSE}). When \code{FALSE}, a
 #'   missing GLOW chromosome file or native array task is an error; when \code{TRUE} it is a
 #'   warning and the assembly proceeds on the present files.
+#' @param result_prefix Character. The stem of the per-chromosome GLOW files
+#'   under \code{results-glow/}: \code{"glow_coding"} (default) reads
+#'   \code{glow_coding_chr<N>.csv}; \code{"glow_noncoding"} reads the
+#'   gene-centric non-coding masks' tables.
+#' @param type_label Character. Names the returned tables: \code{"coding"}
+#'   (default) gives \code{glow_coding_all}, \code{coding_merged},
+#'   \code{coding_sig_by_category}, \code{coding_sig_by_category_cells};
+#'   \code{"noncoding"} the same with that word.
+#' @param family_alpha Numeric or NULL (default). When given, the across-family
+#'   cutoff is computed as \code{family_alpha / n_all}, with \code{n_all} the
+#'   tested cells of the method over all categories, in place of the fixed
+#'   \code{gw_alpha}; both denominators are reported in \code{thresholds}.
+#' @param gene_anchor A data.frame with \code{gene}, \code{chr} and
+#'   \code{anchor} (an integer position per gene), or NULL (default). When
+#'   given, rows are ordered by \code{(chr, anchor, gene, category)} instead of
+#'   \code{(chr, start, category)}, so that a gene's categories stay together
+#'   when their spans differ (the non-coding masks); a gene absent from the
+#'   table falls back to its row's \code{start}. See
+#'   \code{\link{noncoding_gene_anchor}}.
+#' @param reference_cutoffs A data.frame with \code{category}, \code{cutoff}
+#'   and \code{derivation}, or NULL (default): published constants printed
+#'   beside the computed cutoffs in \code{thresholds} (the category
+#'   \code{"all"} for the across-family one). They are never applied.
 #'
-#' @return A named list:
+#' @return A named list (the four table names below take \code{type_label} in
+#'   place of \code{coding}):
 #' \describe{
 #'   \item{glow_coding_all}{Genome-wide GLOW table (gene x category), with the
 #'     \code{*_glowG} rename and \code{label, chr, category} fronted.}
@@ -128,6 +154,20 @@
 #'   \item{methods}{The method columns present in \code{coding_merged}.}
 #'   \item{completeness}{Character vector reconciling expected vs present GLOW
 #'     chromosomes and native array tasks (the completeness-report lines).}
+#'   \item{thresholds}{One row per \code{(method, category)} and per
+#'     \code{(method, "all")}: \code{n_tested}, the computed \code{cutoff}, how it
+#'     was computed (\code{cutoff_rule}), and the reference constant with its
+#'     derivation when \code{reference_cutoffs} gives one.}
+#'   \item{completeness_table}{One row per requested chromosome: its
+#'     \code{status} (\code{"present"}, \code{"empty results file"} when every
+#'     cell skipped or errored, \code{"no results file"} under
+#'     \code{allow_partial}), the cells (rows) and genes, the tested cells of the
+#'     primary test and the rows whose primary p-value is missing, the cells
+#'     attempted, ok, skipped (\code{n_skip_empty}, \code{n_staar_skip_single})
+#'     and errored read from \code{<prefix>_chr<N>_summary.csv} when that
+#'     sidecar exists (the non-coding type; NA otherwise), and the error rows
+#'     read from \code{<prefix>_chr<N>_errors.csv} when that file exists (NA
+#'     otherwise).}
 #' }
 #'
 #' @seealso [aggregate_scan_results()], [run_scan_unit()], [build_scan_regions()]
@@ -151,6 +191,27 @@
 #'   staar_modes      = c("spa", "nospa"))
 #' head(agg$coding_merged)
 #' agg$coding_sig_by_category
+#'
+#' # The gene-centric non-coding masks: the same function pointed at the
+#' # glow_noncoding_chr*.csv tables, the across-family cutoff computed from the
+#' # tested cells (family_alpha / n_all) and the rows ordered by the gene anchor.
+#' # staar_modes = character(0) reads no native STAARpipeline tables; the
+#' # comparator columns inside the GLOW tables (STAAR_O_glowG, ACAT_O_glowG)
+#' # are kept either way.
+#' tbl <- do.call(rbind, lapply(1:22, function(k) utils::read.csv(
+#'   sprintf("runs/myrun/outputs/results-glow/glow_noncoding_chr%d.csv", k),
+#'   stringsAsFactors = FALSE, colClasses = c(chr = "character"))))
+#' nc <- aggregate_coding_results(
+#'   output_dir        = "runs/myrun/outputs",
+#'   chroms            = 1:22,
+#'   gene_num_in_array = 500,
+#'   staar_modes       = character(0),
+#'   result_prefix     = "glow_noncoding",
+#'   type_label        = "noncoding",
+#'   family_alpha      = 0.05,
+#'   gene_anchor       = noncoding_gene_anchor(tbl))
+#' nc$thresholds
+#' nc$completeness_table
 #' }
 #'
 #' @export
@@ -162,17 +223,32 @@ aggregate_coding_results <- function(output_dir,
                                      alpha = 0.05,
                                      gw_alpha = 2.5e-6,
                                      primary_test = "GLOW_Omni",
-                                     allow_partial = FALSE) {
+                                     allow_partial = FALSE,
+                                     result_prefix = "glow_coding",
+                                     type_label = "coding",
+                                     family_alpha = NULL,
+                                     gene_anchor = NULL,
+                                     reference_cutoffs = NULL) {
 
   stopifnot(dir.exists(output_dir))
   chroms <- as.integer(chroms)
   prov_lines <- character(0L)        # completeness provenance -> coding_completeness.txt
+  stopifnot(is.character(result_prefix), length(result_prefix) == 1L,
+            is.character(type_label), length(type_label) == 1L)
+  if (!is.null(family_alpha)) stopifnot(is.numeric(family_alpha), family_alpha > 0, family_alpha < 1)
+  if (!is.null(gene_anchor)) {
+    stopifnot(is.data.frame(gene_anchor), all(c("gene", "chr", "anchor") %in% names(gene_anchor)))
+  }
+  if (!is.null(reference_cutoffs)) {
+    stopifnot(is.data.frame(reference_cutoffs),
+              all(c("category", "cutoff", "derivation") %in% names(reference_cutoffs)))
+  }
 
   # ===========================================================================
-  # (1) GLOW: rbind per-chr glow_coding_chr*.csv, rename *_glowG
+  # (1) GLOW: rbind per-chr <prefix>_chr*.csv, rename *_glowG
   # ===========================================================================
   glow_dir   <- file.path(output_dir, "results-glow")
-  glow_files <- file.path(glow_dir, sprintf("glow_coding_chr%d.csv", chroms))
+  glow_files <- file.path(glow_dir, sprintf("%s_chr%d.csv", result_prefix, chroms))
   present_glow <- file.exists(glow_files)
   missing_glow <- glow_files[!present_glow]
   prov_lines <- c(prov_lines,
@@ -190,6 +266,7 @@ aggregate_coding_results <- function(output_dir,
   }
 
   glow_all <- .acr_read_glow_chr(glow_files)
+  error_rows <- .acr_read_errors(glow_dir, result_prefix, chroms)
 
   # ===========================================================================
   # (2) native STAAR, both modes
@@ -273,9 +350,23 @@ aggregate_coding_results <- function(output_dir,
   # Gene-first OUTPUT (design Q6): (chr, gene_start, category) -- one block per
   # gene at its genomic position with categories underneath. `start` is the gene
   # start carried in from GLOW. (Prior 04 sorted (chr, gene-alphabetical,
-  # category); content is identical, only row order changes.)
-  merged <- merged[order(.chr_rank(merged$chr), merged$start, merged$category),
-                   , drop = FALSE]
+  # category); content is identical, only row order changes.) With a
+  # gene_anchor table the anchor replaces `start`, so that a gene whose
+  # categories have different spans (the non-coding masks) keeps them together.
+  row_anchor <- function(d) {
+    if (is.null(gene_anchor)) return(d$start)
+    a <- gene_anchor$anchor[match(paste(d$chr, d$gene), paste(gene_anchor$chr, gene_anchor$gene))]
+    a[is.na(a)] <- d$start[is.na(a)]
+    a
+  }
+  # Without a gene_anchor the order is the coding one, (chr, start, category),
+  # exactly as before the anchor existed, so tied starts keep their order; with
+  # an anchor it is (chr, anchor, gene, category).
+  gene_first_order <- function(d) {
+    if (is.null(gene_anchor)) order(.chr_rank(d$chr), d$start, d$category) else
+      order(.chr_rank(d$chr), row_anchor(d), d$gene, d$category)
+  }
+  merged <- merged[gene_first_order(merged), , drop = FALSE]
   rownames(merged) <- NULL
 
   # ===========================================================================
@@ -284,6 +375,13 @@ aggregate_coding_results <- function(output_dir,
   methods <- intersect(
     c("GLOW_Omni", "STAAR_O_glowG", "STAAR_O_native", "STAAR_B_native"),
     names(merged))
+  # The across-family cutoff per method: the fixed gw_alpha, or
+  # family_alpha / n_all over the method's tested cells of every category.
+  n_all <- vapply(methods, function(meth) {
+    p <- merged[[meth]]; sum(!is.na(p) & is.finite(p)) }, integer(1))
+  gw_cut <- vapply(methods, function(meth) {
+    if (is.null(family_alpha)) gw_alpha else
+      if (n_all[[meth]] > 0L) family_alpha / n_all[[meth]] else NA_real_ }, numeric(1))
   sig_rows <- list()
   for (cat0 in sort(unique(merged$category))) {
     sub <- merged[merged$category == cat0, , drop = FALSE]
@@ -297,8 +395,8 @@ aggregate_coding_results <- function(output_dir,
         min_p = min(p, na.rm = TRUE),
         bonferroni_threshold = bonf,
         n_sig_bonferroni = sum(p <= bonf, na.rm = TRUE),
-        genomewide_threshold = gw_alpha,
-        n_sig_genomewide = sum(p <= gw_alpha, na.rm = TRUE),
+        genomewide_threshold = gw_cut[[meth]],
+        n_sig_genomewide = sum(p <= gw_cut[[meth]], na.rm = TRUE),
         stringsAsFactors = FALSE)
     }
   }
@@ -323,7 +421,7 @@ aggregate_coding_results <- function(output_dir,
     thr <- bonf_thr[paste(merged$category, meth)]
     ok  <- !is.na(p) & is.finite(p)
     flag_bonf[, meth] <- ok & !is.na(thr) & p <= thr
-    flag_gw[,   meth] <- ok & p <= gw_alpha
+    flag_gw[,   meth] <- ok & !is.na(gw_cut[[meth]]) & p <= gw_cut[[meth]]
   }
   join_methods <- function(flag_row) paste(methods[flag_row], collapse = ",")
   cells <- merged
@@ -343,8 +441,7 @@ aggregate_coding_results <- function(output_dir,
   # gene block at a time. (Prior 04 grouped by category then ascending p; content
   # is the same set of cells, only the row order changes.)
   cells <- cells[is_significant, , drop = FALSE]
-  cells <- cells[order(.chr_rank(cells$chr), cells$start, cells$category),
-                 , drop = FALSE]
+  cells <- cells[gene_first_order(cells), , drop = FALSE]
   rownames(cells) <- NULL
 
   # Column order: cell key/info, the present method p-values, then annotations.
@@ -356,15 +453,128 @@ aggregate_coding_results <- function(output_dir,
   front     <- c(info_cols, methods, ann_cols)
   cells <- cells[, c(front, setdiff(names(cells), front)), drop = FALSE]
 
-  list(
-    glow_coding_all              = glow_all,
-    staar_coding_nospa_all       = nospa_all,
-    staar_coding_spa_all         = spa_all,
-    coding_merged                = merged,
-    coding_sig_by_category       = sig,
-    coding_sig_by_category_cells = cells,
-    methods                      = methods,
-    completeness                 = prov_lines)
+  # ===========================================================================
+  # (6) The threshold contract: every cutoff with its denominator and rule,
+  #     the reference constants beside them; and the per-chr completeness.
+  # ===========================================================================
+  ref_of <- function(cat0) {
+    if (is.null(reference_cutoffs)) return(list(cutoff = NA_real_, derivation = NA_character_))
+    k <- match(cat0, reference_cutoffs$category)
+    if (is.na(k)) list(cutoff = NA_real_, derivation = NA_character_) else
+      list(cutoff = as.numeric(reference_cutoffs$cutoff[k]),
+           derivation = as.character(reference_cutoffs$derivation[k]))
+  }
+  thr_rows <- list()
+  if (nrow(sig) > 0L) {
+    for (i in seq_len(nrow(sig))) {
+      r <- ref_of(sig$category[i])
+      thr_rows[[length(thr_rows) + 1L]] <- data.frame(
+        method = sig$method[i], category = sig$category[i], n_tested = sig$n_tested[i],
+        cutoff = sig$bonferroni_threshold[i],
+        cutoff_rule = sprintf("alpha / n_tested = %s / %d", format(alpha), sig$n_tested[i]),
+        reference_cutoff = r$cutoff, reference_derivation = r$derivation,
+        stringsAsFactors = FALSE)
+    }
+  }
+  for (meth in methods) {
+    r <- ref_of("all")
+    thr_rows[[length(thr_rows) + 1L]] <- data.frame(
+      method = meth, category = "all", n_tested = n_all[[meth]], cutoff = gw_cut[[meth]],
+      cutoff_rule = if (is.null(family_alpha)) sprintf("fixed gw_alpha = %s", format(gw_alpha)) else
+        sprintf("family_alpha / n_all = %s / %d", format(family_alpha), n_all[[meth]]),
+      reference_cutoff = r$cutoff, reference_derivation = r$derivation,
+      stringsAsFactors = FALSE)
+  }
+  thresholds <- if (length(thr_rows)) do.call(rbind, thr_rows) else
+    data.frame(method = character(0), category = character(0), n_tested = integer(0),
+               cutoff = numeric(0), cutoff_rule = character(0),
+               reference_cutoff = numeric(0), reference_derivation = character(0))
+  rownames(thresholds) <- NULL
+  # One row per REQUESTED chromosome, not per chromosome with rows, so that a
+  # chromosome whose file is missing (allow_partial) or whose cells all skipped
+  # or errored (an empty table) is listed with its status. The attempted, ok,
+  # skipped and errored tallies come from the per-chr summary sidecar that
+  # run_scan_unit() writes for the non-coding type (NA where none exists).
+  summary_rows <- .acr_read_summaries(glow_dir, result_prefix, chroms)
+  tally <- function(s, col) if (is.null(s) || nrow(s) == 0L) NA_integer_ else
+    as.integer(sum(s[[col]]))
+  completeness_table <- do.call(rbind, lapply(seq_along(chroms), function(i) {
+    ch <- as.character(chroms[i])
+    d <- glow_all[glow_all$chr == ch, , drop = FALSE]
+    p <- if (primary_test %in% names(d)) d[[primary_test]] else rep(NA_real_, nrow(d))
+    s <- if (is.null(summary_rows)) NULL else
+      summary_rows[summary_rows$chr == ch, , drop = FALSE]
+    status <- if (!present_glow[i]) "no results file" else
+      if (nrow(d) == 0L) "empty results file" else "present"
+    data.frame(chr = ch, status = status,
+               n_cells = nrow(d), n_genes = length(unique(d$label)),
+               n_tested_primary = sum(!is.na(p) & is.finite(p)),
+               n_missing_primary = sum(is.na(p) | !is.finite(p)),
+               n_attempted = tally(s, "n_attempted"), n_ok = tally(s, "n_ok"),
+               n_skip_empty = tally(s, "n_skip_empty"),
+               n_staar_skip_single = tally(s, "n_staar_skip_single"),
+               n_errored = tally(s, "n_error"),
+               n_error_rows = if (is.null(error_rows)) NA_integer_ else
+                 sum(error_rows$chr == ch),
+               stringsAsFactors = FALSE)
+  }))
+  rownames(completeness_table) <- NULL
+
+  out <- list(glow_all, nospa_all, spa_all, merged, sig, cells, methods, prov_lines,
+              thresholds, completeness_table)
+  names(out) <- c(paste0("glow_", type_label, "_all"),
+                  paste0("staar_", type_label, "_nospa_all"),
+                  paste0("staar_", type_label, "_spa_all"),
+                  paste0(type_label, "_merged"),
+                  paste0(type_label, "_sig_by_category"),
+                  paste0(type_label, "_sig_by_category_cells"),
+                  "methods", "completeness", "thresholds", "completeness_table")
+  out
+}
+
+
+#' The Gene Anchor That Orders a Gene-Centric Non-Coding Table
+#'
+#' A gene's non-coding masks have different candidate spans (an enhancer can
+#' lie far from the gene), so a sort on \code{start} separates them. This
+#' function gives every gene of a results table one position, its anchor: the
+#' bundled gene table's start for a protein-coding gene (the same table
+#' \code{GLOWr::define_regions_gene} uses), and the smallest \code{start} over
+#' the gene's rows for a gene not in that table (an ncRNA gene). The scan unit
+#' and \code{\link{aggregate_coding_results}} (through \code{gene_anchor})
+#' order rows by \code{(chr, anchor, gene, category)}.
+#'
+#' @param tbl A results table with \code{label} (or \code{gene}), \code{chr}
+#'   and \code{start} columns.
+#' @param genes_info A gene table in the layout \code{GLOWr::define_regions_gene}
+#'   accepts, or NULL (the bundled protein-coding table).
+#'
+#' @return A data.frame with one row per \code{(gene, chr)}: \code{gene},
+#'   \code{chr}, \code{anchor} (integer position) and \code{family}
+#'   (\code{"protein_coding"} or \code{"other"}).
+#'
+#' @examples
+#' \dontrun{
+#' tbl <- read.csv("runs/myrun/outputs/results-glow/glow_noncoding_chr22.csv")
+#' anchor <- noncoding_gene_anchor(tbl)
+#' }
+#' @export
+noncoding_gene_anchor <- function(tbl, genes_info = NULL) {
+  gene_col <- if ("gene" %in% names(tbl)) "gene" else "label"
+  stopifnot(all(c(gene_col, "chr", "start") %in% names(tbl)))
+  genes <- GLOWr::define_regions_gene(genes_info)
+  key_t <- paste(as.character(tbl$chr), as.character(tbl[[gene_col]]))
+  key_g <- paste(as.character(genes$chr), as.character(genes$label))
+  pc_start <- genes$start[match(key_t, key_g)]
+  min_start <- tapply(as.integer(tbl$start), key_t, min)
+  anchor <- ifelse(is.na(pc_start), as.integer(min_start[key_t]), as.integer(pc_start))
+  out <- data.frame(gene = as.character(tbl[[gene_col]]), chr = as.character(tbl$chr),
+                    anchor = as.integer(anchor),
+                    family = ifelse(is.na(pc_start), "other", "protein_coding"),
+                    stringsAsFactors = FALSE)
+  out <- out[!duplicated(key_t), , drop = FALSE]
+  rownames(out) <- NULL
+  out
 }
 
 
@@ -434,6 +644,59 @@ aggregate_coding_results <- function(output_dir,
   glow_all <- glow_all[, c(front, setdiff(names(glow_all), front)), drop = FALSE]
   rownames(glow_all) <- NULL
   glow_all
+}
+
+
+#' rbind the per-chr error CSVs a scan unit wrote, when any exists
+#'
+#' \code{run_scan_unit()} writes \code{<prefix>_chr<N>_errors.csv} beside a
+#' noncoding flat table whose cells errored. Returns NULL when no chromosome
+#' has one (so the completeness table reports NA rather than 0).
+#'
+#' @param glow_dir The \code{results-glow/} directory.
+#' @param result_prefix The per-chr file stem.
+#' @param chroms The run's chromosomes.
+#' @return A data.frame with \code{chr}, \code{category}, \code{label},
+#'   \code{message}, or NULL.
+#' @keywords internal
+#' @noRd
+.acr_read_errors <- function(glow_dir, result_prefix, chroms) {
+  files <- file.path(glow_dir, sprintf("%s_chr%d_errors.csv", result_prefix, chroms))
+  have <- file.exists(files)
+  if (!any(have)) return(NULL)
+  parts <- lapply(which(have), function(i) {
+    d <- utils::read.csv(files[i], stringsAsFactors = FALSE)
+    d$chr <- rep(as.character(chroms[i]), nrow(d))   # a zero-row file stays zero-row
+    d
+  })
+  out <- do.call(rbind, parts)
+  rownames(out) <- NULL
+  out
+}
+
+
+#' Read the Per-Chr Summary Sidecars (noncoding), When Present
+#'
+#' \code{run_scan_unit()} writes \code{<prefix>_chr<N>_summary.csv} beside each
+#' non-coding table: one row per mask with the cells attempted, ok, skipped
+#' (empty set; single rare variant for the comparator) and errored.
+#'
+#' @return A data.frame with \code{chr} and the tally columns, or NULL when no
+#'   sidecar exists (the coding route writes none).
+#' @keywords internal
+#' @noRd
+.acr_read_summaries <- function(glow_dir, result_prefix, chroms) {
+  files <- file.path(glow_dir, sprintf("%s_chr%d_summary.csv", result_prefix, chroms))
+  have <- file.exists(files)
+  if (!any(have)) return(NULL)
+  parts <- lapply(which(have), function(i) {
+    d <- utils::read.csv(files[i], stringsAsFactors = FALSE)
+    d$chr <- rep(as.character(chroms[i]), nrow(d))
+    d
+  })
+  out <- do.call(rbind, parts)
+  rownames(out) <- NULL
+  out
 }
 
 

@@ -13,7 +13,12 @@ aggregate_coding_results(
   alpha = 0.05,
   gw_alpha = 2.5e-06,
   primary_test = "GLOW_Omni",
-  allow_partial = FALSE
+  allow_partial = FALSE,
+  result_prefix = "glow_coding",
+  type_label = "coding",
+  family_alpha = NULL,
+  gene_anchor = NULL,
+  reference_cutoffs = NULL
 )
 }
 \arguments{
@@ -50,9 +55,38 @@ within-category order (default \code{"GLOW_Omni"}).}
 \item{allow_partial}{Logical (default \code{FALSE}). When \code{FALSE}, a
 missing GLOW chromosome file or native array task is an error; when \code{TRUE} it is a
 warning and the assembly proceeds on the present files.}
+
+\item{result_prefix}{Character. The stem of the per-chromosome GLOW files
+under \code{results-glow/}: \code{"glow_coding"} (default) reads
+\code{glow_coding_chr<N>.csv}; \code{"glow_noncoding"} reads the
+gene-centric non-coding masks' tables.}
+
+\item{type_label}{Character. Names the returned tables: \code{"coding"}
+(default) gives \code{glow_coding_all}, \code{coding_merged},
+\code{coding_sig_by_category}, \code{coding_sig_by_category_cells};
+\code{"noncoding"} the same with that word.}
+
+\item{family_alpha}{Numeric or NULL (default). When given, the across-family
+cutoff is computed as \code{family_alpha / n_all}, with \code{n_all} the
+tested cells of the method over all categories, in place of the fixed
+\code{gw_alpha}; both denominators are reported in \code{thresholds}.}
+
+\item{gene_anchor}{A data.frame with \code{gene}, \code{chr} and
+\code{anchor} (an integer position per gene), or NULL (default). When
+given, rows are ordered by \code{(chr, anchor, gene, category)} instead of
+\code{(chr, start, category)}, so that a gene's categories stay together
+when their spans differ (the non-coding masks); a gene absent from the
+table falls back to its row's \code{start}. See
+\code{\link{noncoding_gene_anchor}}.}
+
+\item{reference_cutoffs}{A data.frame with \code{category}, \code{cutoff}
+and \code{derivation}, or NULL (default): published constants printed
+beside the computed cutoffs in \code{thresholds} (the category
+\code{"all"} for the across-family one). They are never applied.}
 }
 \value{
-A named list:
+A named list (the four table names below take \code{type_label} in
+place of \code{coding}):
 \describe{
 \item{glow_coding_all}{Genome-wide GLOW table (gene x category), with the
 \code{*_glowG} rename and \code{label, chr, category} fronted.}
@@ -69,6 +103,20 @@ count chain, a global GLOW rank, and the significance flags.}
 \item{methods}{The method columns present in \code{coding_merged}.}
 \item{completeness}{Character vector reconciling expected vs present GLOW
 chromosomes and native array tasks (the completeness-report lines).}
+\item{thresholds}{One row per \code{(method, category)} and per
+\code{(method, "all")}: \code{n_tested}, the computed \code{cutoff}, how it
+was computed (\code{cutoff_rule}), and the reference constant with its
+derivation when \code{reference_cutoffs} gives one.}
+\item{completeness_table}{One row per requested chromosome: its
+\code{status} (\code{"present"}, \code{"empty results file"} when every
+cell skipped or errored, \code{"no results file"} under
+\code{allow_partial}), the cells (rows) and genes, the tested cells of the
+primary test and the rows whose primary p-value is missing, the cells
+attempted, ok, skipped (\code{n_skip_empty}, \code{n_staar_skip_single})
+and errored read from \code{<prefix>_chr<N>_summary.csv} when that
+sidecar exists (the non-coding type; NA otherwise), and the error rows
+read from \code{<prefix>_chr<N>_errors.csv} when that file exists (NA
+otherwise).}
 }
 }
 \description{
@@ -131,6 +179,27 @@ agg <- aggregate_coding_results(
   staar_modes      = c("spa", "nospa"))
 head(agg$coding_merged)
 agg$coding_sig_by_category
+
+# The gene-centric non-coding masks: the same function pointed at the
+# glow_noncoding_chr*.csv tables, the across-family cutoff computed from the
+# tested cells (family_alpha / n_all) and the rows ordered by the gene anchor.
+# staar_modes = character(0) reads no native STAARpipeline tables; the
+# comparator columns inside the GLOW tables (STAAR_O_glowG, ACAT_O_glowG)
+# are kept either way.
+tbl <- do.call(rbind, lapply(1:22, function(k) utils::read.csv(
+  sprintf("runs/myrun/outputs/results-glow/glow_noncoding_chr\%d.csv", k),
+  stringsAsFactors = FALSE, colClasses = c(chr = "character"))))
+nc <- aggregate_coding_results(
+  output_dir        = "runs/myrun/outputs",
+  chroms            = 1:22,
+  gene_num_in_array = 500,
+  staar_modes       = character(0),
+  result_prefix     = "glow_noncoding",
+  type_label        = "noncoding",
+  family_alpha      = 0.05,
+  gene_anchor       = noncoding_gene_anchor(tbl))
+nc$thresholds
+nc$completeness_table
 }
 
 }

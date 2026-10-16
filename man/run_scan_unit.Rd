@@ -40,8 +40,9 @@ prepared inputs (from \code{\link{prepare_scan_run}}), passed to the scan engine
 \item{b_func, b_model}{The B source (exactly one non-NULL), passed to the
 engine.}
 
-\item{region_type}{Character: \code{"gene"}, \code{"window"}, or
-\code{"coding"}.}
+\item{region_type}{Character: \code{"gene"}, \code{"window"},
+\code{"coding"} or \code{"noncoding"} (the gene-centric non-coding masks,
+see the section below).}
 
 \item{config}{An environment or named list of resolved config values. Used for
 the region/filter build (see \code{\link{build_scan_regions}}) and the engine
@@ -82,15 +83,16 @@ NULL.}
 
 \item{n_cores}{Integer or NULL (default). Forked workers for this unit. NULL
 reads \code{config$n_cores} and falls back to 1. With more than one, the
-regions are split into blocks of 25 consecutive regions, each block runs
-\code{\link{glow_scan_chunk}} in a forked worker with its own GDS handle
-(\code{parallel::mclapply}, dynamic scheduling so a block with a large
-gene does not hold the others), and the block outputs are merged in block
-order, so the written table equals the single-core one. The progress
-callback is off inside the workers; the parent logs one line per finished
-block. Forking is unavailable on Windows (a value above 1 warns and runs
-serially). Memory scales with the workers, since each holds its own
-genotype and LD matrices.}
+regions are grouped into blocks by size (see the section "Scheduling over
+the workers"), each block runs \code{\link{glow_scan_chunk}} in a forked
+worker with its own GDS handle (\code{parallel::mclapply}, dynamic
+dispatch), and the block outputs are merged and restored to the regions
+table's order by label, so the written table equals the single-core one.
+The progress callback is off inside the workers; the parent logs one
+scheduler line per regions table and one line per finished block. Forking
+is unavailable on Windows (a value above 1 warns and runs serially).
+Memory scales with the workers, since each holds its own genotype and LD
+matrices.}
 
 \item{verbose}{Integer threaded to the engine. Default 0.}
 }
@@ -133,6 +135,30 @@ written under \code{output_dir} into their own on-demand folders, only when
 both the policy flag is on and the scan engine
 produced the artifact (so no orphan/empty folders).
 }
+\section{Gene-centric non-coding masks}{
+
+For \code{region_type = "noncoding"} the unit is a chromosome and
+\code{\link{build_scan_regions}} returns one regions table per mask of
+\code{config$noncoding_categories} (default the eight masks of
+\code{GLOWr::noncoding_masks()}), built once from the chromosome's
+annotations by \code{GLOWr::define_regions_noncoding}. Each mask's table is
+run like a coding category (the label check, \code{max_regions} and the
+scheduler apply per table; \code{region_summary} is off), the rows are
+tagged with \code{category}, and the combined table leads with
+\code{label, chr, category} and is sorted gene-first by the gene anchor of
+\code{\link{noncoding_gene_anchor}} (a gene's masks together, because their
+candidate spans differ), then by mask. A row's \code{start}, \code{end} and
+\code{midpoint} describe the candidate span, which is wide for an enhancer
+far from its gene. Two sidecars are written beside the flat table on every
+completed unit, for the aggregation's completeness table: the error table as
+\code{<results_path stem>_errors.csv} (zero rows when no cell errored, so a
+rerun never leaves an earlier run's errors beside a clean table) and the
+per-mask tallies (cells attempted, tested, skipped for an empty set or a
+single rare variant, errored) as \code{<results_path stem>_summary.csv}.
+The log carries one line per mask with the genes, the selected records and
+the links.
+}
+
 \section{Large genes}{
 
 For \code{region_type = "gene"} the unit's variant index is passed to
@@ -140,6 +166,36 @@ For \code{region_type = "gene"} the unit's variant index is passed to
 records than \code{config$gene_max_records} into segments of
 \code{config$gene_segment_bp} (see that function). The log states how many
 genes were segmented and into how many segments.
+}
+
+\section{Scheduling over the workers}{
+
+With \code{n_cores > 1} the regions of a table are not run in genomic order.
+Heavy genes sit next to each other on the genome, and a block of consecutive
+regions that holds several of them keeps one worker busy long after the
+others have finished. Instead, every region's GDS record count \eqn{n_i} is
+read from the unit's variant index (two binary searches per region, no
+genotype read; the gene segmentation's \code{n_records} is reused where
+present) and its cost is taken as \eqn{c_i = n_i^2}, a heuristic that lets a
+few heavy regions dominate the sums. With \eqn{C = \sum_i c_i} and
+\eqn{\tau = C / (8\,\mathrm{n\_cores})}, a region with \eqn{c_i \ge \tau}
+forms a block of its own; the remaining regions, in decreasing cost, are
+packed into blocks that close at 25 regions or when the next region would
+push the summed cost above \eqn{\tau}; and the blocks are dispatched in
+decreasing summed cost, so the heaviest work starts first and the light
+blocks fill the tail. When \eqn{C = 0} the regions keep their order in blocks
+of 25. Each region is computed independently of its block, so the merged
+rows are the serial ones; the merge puts the flat rows, the error rows and
+the sidecar entries back in the order of the labels in the regions table.
+This needs unique labels, which the function enforces at every
+\code{n_cores}: a repeated label stops the run with the duplicates named,
+because the sidecars and the error table are keyed by label and a duplicate
+already loses information silently in the serial path. For the coding type
+each category's pass over the gene table is scheduled this way, one category
+after another. The log's scheduler line gives the number of blocks, how many
+are a heavy region alone, the heaviest region and \eqn{\tau}; each block line
+gives the block's region count, its heaviest record count, its tally and
+its wall time, so the reader sees where the unit's time went.
 }
 
 \examples{

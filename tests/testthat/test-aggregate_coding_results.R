@@ -270,3 +270,177 @@ test_that("missing output_dir / unknown primary_test error", {
                              staar_modes = character(0), primary_test = "NOPE"),
     "primary-test column")
 })
+
+
+test_that("result_prefix and type_label route the non-coding files and name the tables", {
+  g22 <- .mk_glow_chr(22, c("A", "B", "A"), c(100L, 500L, 10000L),
+                      c("upstream", "upstream", "enhancer_CAGE"), c(1e-3, 0.2, 0.05))
+  od <- tempfile("acr_nc_"); dir.create(file.path(od, "results-glow"), recursive = TRUE)
+  utils::write.csv(g22, file.path(od, "results-glow", "glow_noncoding_chr22.csv"), row.names = FALSE)
+  on.exit(unlink(od, recursive = TRUE), add = TRUE)
+  agg <- aggregate_coding_results(od, chroms = 22L, gene_num_in_array = 500L,
+                                  staar_modes = character(0), result_prefix = "glow_noncoding",
+                                  type_label = "noncoding")
+  expect_true(all(c("glow_noncoding_all", "noncoding_merged", "noncoding_sig_by_category",
+                    "noncoding_sig_by_category_cells", "thresholds", "completeness_table")
+                  %in% names(agg)))
+  expect_false("coding_merged" %in% names(agg))
+  expect_equal(nrow(agg$noncoding_merged), 3L)
+  # The coding default still reads glow_coding_chr*.csv and names its tables as before.
+  expect_error(aggregate_coding_results(od, chroms = 22L, gene_num_in_array = 500L,
+                                        staar_modes = character(0)), "glow_coding_chr22")
+})
+
+test_that("the gene anchor keeps a gene's masks together when their spans differ", {
+  # The review's counterexample: A upstream at 100, B upstream at 500, A
+  # enhancer at 10,000. A (start, category) sort separates A's two masks.
+  g22 <- .mk_glow_chr(22, c("A", "B", "A"), c(100L, 500L, 10000L),
+                      c("upstream", "upstream", "enhancer_CAGE"), c(1e-3, 0.2, 0.05))
+  od <- tempfile("acr_nc_"); dir.create(file.path(od, "results-glow"), recursive = TRUE)
+  utils::write.csv(g22, file.path(od, "results-glow", "glow_noncoding_chr22.csv"), row.names = FALSE)
+  on.exit(unlink(od, recursive = TRUE), add = TRUE)
+  anchor <- data.frame(gene = c("A", "B"), chr = "22", anchor = c(100L, 500L), stringsAsFactors = FALSE)
+  agg <- aggregate_coding_results(od, chroms = 22L, gene_num_in_array = 500L,
+                                  staar_modes = character(0), result_prefix = "glow_noncoding",
+                                  type_label = "noncoding", gene_anchor = anchor)
+  m <- agg$noncoding_merged
+  expect_equal(m$gene, c("A", "A", "B"))
+  expect_equal(m$category, c("enhancer_CAGE", "upstream", "upstream"))
+  # Without the anchor the old (start, category) order separates them.
+  agg0 <- aggregate_coding_results(od, chroms = 22L, gene_num_in_array = 500L,
+                                   staar_modes = character(0), result_prefix = "glow_noncoding",
+                                   type_label = "noncoding")
+  expect_equal(agg0$noncoding_merged$gene, c("A", "B", "A"))
+  # noncoding_gene_anchor() on a table: the bundled table's start for a
+  # protein-coding gene, the smallest start otherwise.
+  tbl <- data.frame(label = c("ZZZ_not_a_gene", "ZZZ_not_a_gene", "RABGGTB"), chr = c("1", "1", "1"),
+                    start = c(500L, 100L, 999L), stringsAsFactors = FALSE)
+  an <- noncoding_gene_anchor(tbl)
+  expect_equal(an$anchor[an$gene == "ZZZ_not_a_gene"], 100L)
+  expect_equal(an$family[an$gene == "ZZZ_not_a_gene"], "other")
+  expect_equal(an$family[an$gene == "RABGGTB"], "protein_coding")
+  expect_equal(an$anchor[an$gene == "RABGGTB"], 75786197L)
+})
+
+test_that("the family threshold, its denominators, the reference constants and the completeness table", {
+  # Unequal mask sizes; one cell with a missing comparator value (STAAR_O NA).
+  g21 <- .mk_glow_chr(21, c("A", "B", "C", "A"), c(1L, 2L, 3L, 4L),
+                      c("upstream", "upstream", "upstream", "UTR"),
+                      c(1e-9, 0.5, 0.5, 0.5), staar_o = c(0.1, NA, 0.3, 0.4))
+  g22 <- .mk_glow_chr(22, c("D", "D"), c(10L, 20L), c("upstream", "ncRNA"), c(0.5, 1e-8))
+  od <- tempfile("acr_nc_"); dir.create(file.path(od, "results-glow"), recursive = TRUE)
+  utils::write.csv(g21, file.path(od, "results-glow", "glow_noncoding_chr21.csv"), row.names = FALSE)
+  utils::write.csv(g22, file.path(od, "results-glow", "glow_noncoding_chr22.csv"), row.names = FALSE)
+  utils::write.csv(data.frame(category = "UTR", label = "D", message = "planted"),
+                   file.path(od, "results-glow", "glow_noncoding_chr22_errors.csv"), row.names = FALSE)
+  on.exit(unlink(od, recursive = TRUE), add = TRUE)
+  refs <- data.frame(category = c("upstream", "ncRNA", "all"), cutoff = c(3.57e-7, 2.5e-6, 3.57e-7),
+                     derivation = c("0.05 / (20,000 x 7)", "0.05 / 20,000", "0.05 / (20,000 x 7)"),
+                     stringsAsFactors = FALSE)
+  agg <- aggregate_coding_results(od, chroms = 21:22, gene_num_in_array = 500L,
+                                  staar_modes = character(0), result_prefix = "glow_noncoding",
+                                  type_label = "noncoding", family_alpha = 0.05,
+                                  reference_cutoffs = refs)
+  thr <- agg$thresholds
+  # Per mask: alpha / n_tested; across all: family_alpha / n_all = 0.05 / 6 for GLOW,
+  # 0.05 / 5 for the comparator (one NA).
+  expect_equal(thr$cutoff[thr$method == "GLOW_Omni" & thr$category == "upstream"], 0.05 / 4)
+  expect_equal(thr$n_tested[thr$method == "GLOW_Omni" & thr$category == "all"], 6L)
+  expect_equal(thr$cutoff[thr$method == "GLOW_Omni" & thr$category == "all"], 0.05 / 6)
+  expect_equal(thr$n_tested[thr$method == "STAAR_O_glowG" & thr$category == "all"], 5L)
+  expect_equal(thr$cutoff[thr$method == "STAAR_O_glowG" & thr$category == "all"], 0.05 / 5)
+  expect_match(thr$cutoff_rule[thr$method == "GLOW_Omni" & thr$category == "all"], "family_alpha / n_all")
+  expect_equal(thr$reference_cutoff[thr$method == "GLOW_Omni" & thr$category == "upstream"], 3.57e-7)
+  expect_equal(thr$reference_derivation[thr$method == "GLOW_Omni" & thr$category == "ncRNA"], "0.05 / 20,000")
+  expect_true(is.na(thr$reference_cutoff[thr$method == "GLOW_Omni" & thr$category == "UTR"]))
+  # The computed across-family cutoff is what flags the cells: both 1e-9 and 1e-8 clear 0.05 / 6.
+  sig <- agg$noncoding_sig_by_category
+  expect_equal(sig$genomewide_threshold[sig$method == "GLOW_Omni" & sig$category == "upstream"], 0.05 / 6)
+  expect_equal(sum(sig$n_sig_genomewide[sig$method == "GLOW_Omni"]), 2L)
+  # Without family_alpha the fixed gw_alpha stays, as for coding.
+  agg0 <- aggregate_coding_results(od, chroms = 21:22, gene_num_in_array = 500L,
+                                   staar_modes = character(0), result_prefix = "glow_noncoding",
+                                   type_label = "noncoding")
+  thr0 <- agg0$thresholds
+  expect_equal(thr0$cutoff[thr0$method == "GLOW_Omni" & thr0$category == "all"], 2.5e-6)
+  expect_match(thr0$cutoff_rule[thr0$method == "GLOW_Omni" & thr0$category == "all"], "fixed gw_alpha")
+  # Completeness: per chromosome, the cells, genes, tested and missing primary
+  # p-values, and the error rows (NA where no errors file exists).
+  ct <- agg$completeness_table
+  expect_equal(ct$chr, c("21", "22"))
+  expect_equal(ct$n_cells, c(4L, 2L))
+  expect_equal(ct$n_genes, c(3L, 1L))
+  expect_equal(ct$n_tested_primary, c(4L, 2L))
+  expect_equal(ct$n_error_rows, c(0L, 1L))
+  # A missing chromosome still stops (the family is never defined on a partial run).
+  expect_error(aggregate_coding_results(od, chroms = 20:22, gene_num_in_array = 500L,
+                                        staar_modes = character(0), result_prefix = "glow_noncoding",
+                                        type_label = "noncoding", family_alpha = 0.05),
+               "Missing GLOW")
+})
+
+# ---- 2026-10-16: the implementation review round (D3, D6) ----
+
+test_that("without a gene anchor the coding order is (chr, start, category), tied starts included", {
+  g1 <- .mk_glow_chr("1", gene = c("A", "A", "B", "B"), start = c(100L, 100L, 100L, 100L),
+                     category = c("missense", "plof", "missense", "plof"),
+                     glow_omni = c(1e-9, 1e-9, 1e-9, 1e-9))
+  od <- .mk_run_dir(list("1" = g1))
+  on.exit(unlink(od, recursive = TRUE), add = TRUE)
+  agg <- aggregate_coding_results(od, chroms = 1L, gene_num_in_array = 500L,
+                                  staar_modes = character(0))
+  key <- function(d) paste(d$gene, d$category)
+  expect_equal(key(agg$coding_merged), c("A missense", "B missense", "A plof", "B plof"))
+  expect_equal(key(agg$coding_sig_by_category_cells),
+               c("A missense", "B missense", "A plof", "B plof"))
+  # With a gene anchor the gene comes before the category.
+  anchor <- data.frame(gene = c("A", "B"), chr = "1", anchor = c(100L, 100L),
+                       stringsAsFactors = FALSE)
+  agg2 <- aggregate_coding_results(od, chroms = 1L, gene_num_in_array = 500L,
+                                   staar_modes = character(0), gene_anchor = anchor)
+  expect_equal(key(agg2$coding_merged), c("A missense", "A plof", "B missense", "B plof"))
+})
+
+test_that("the completeness table lists every requested chromosome with its status and the sidecar tallies", {
+  g21 <- .mk_glow_chr(21, c("A", "B"), c(1L, 2L), c("upstream", "UTR"), c(0.5, 0.4))
+  g22 <- .mk_glow_chr(22, "X", 1L, "upstream", 0.5)[0, ]                      # all skipped or errored
+  od <- tempfile("acr_cmp_"); gdir <- file.path(od, "results-glow")
+  dir.create(gdir, recursive = TRUE)
+  on.exit(unlink(od, recursive = TRUE), add = TRUE)
+  utils::write.csv(g21, file.path(gdir, "glow_noncoding_chr21.csv"), row.names = FALSE)
+  utils::write.csv(g22, file.path(gdir, "glow_noncoding_chr22.csv"), row.names = FALSE)
+  # A zero-row errors sidecar on 21 (a clean unit), two error rows on 22.
+  utils::write.csv(data.frame(category = character(0), label = character(0), message = character(0)),
+                   file.path(gdir, "glow_noncoding_chr21_errors.csv"), row.names = FALSE)
+  utils::write.csv(data.frame(category = c("upstream", "UTR"), label = "C", message = "planted"),
+                   file.path(gdir, "glow_noncoding_chr22_errors.csv"), row.names = FALSE)
+  sm <- function(cat, att, ok, skip, err)
+    data.frame(category = cat, n_attempted = att, n_ok = ok, n_skip_empty = skip,
+               n_staar_skip_single = 0L, n_error = err, runtime_secs = 1)
+  utils::write.csv(rbind(sm("upstream", 3L, 1L, 2L, 0L), sm("UTR", 1L, 1L, 0L, 0L)),
+                   file.path(gdir, "glow_noncoding_chr21_summary.csv"), row.names = FALSE)
+  utils::write.csv(rbind(sm("upstream", 2L, 0L, 1L, 1L), sm("UTR", 1L, 0L, 0L, 1L)),
+                   file.path(gdir, "glow_noncoding_chr22_summary.csv"), row.names = FALSE)
+  msgs <- character(0)
+  agg <- withCallingHandlers(
+    aggregate_coding_results(od, chroms = 20:22, gene_num_in_array = 500L,
+                             staar_modes = character(0), result_prefix = "glow_noncoding",
+                             type_label = "noncoding", family_alpha = 0.05, allow_partial = TRUE),
+    message = function(m) { msgs <<- c(msgs, conditionMessage(m)); invokeRestart("muffleMessage") })
+  ct <- agg$completeness_table
+  expect_equal(ct$chr, c("20", "21", "22"))
+  expect_equal(ct$status, c("no results file", "present", "empty results file"))
+  expect_equal(ct$n_cells, c(0L, 2L, 0L))
+  expect_equal(ct$n_attempted, c(NA_integer_, 4L, 3L))
+  expect_equal(ct$n_ok, c(NA_integer_, 2L, 0L))
+  expect_equal(ct$n_skip_empty, c(NA_integer_, 2L, 1L))
+  expect_equal(ct$n_errored, c(NA_integer_, 0L, 2L))
+  expect_equal(ct$n_error_rows, c(0L, 0L, 2L))
+  # Without any sidecar (the coding route) the tallies and the error rows are NA.
+  od2 <- .mk_run_dir(list("1" = .mk_glow_chr("1", "A", 100L, "missense", 0.5)))
+  on.exit(unlink(od2, recursive = TRUE), add = TRUE)
+  ct2 <- aggregate_coding_results(od2, chroms = 1L, gene_num_in_array = 500L,
+                                  staar_modes = character(0))$completeness_table
+  expect_equal(ct2$status, "present")
+  expect_true(is.na(ct2$n_attempted) && is.na(ct2$n_error_rows))
+})

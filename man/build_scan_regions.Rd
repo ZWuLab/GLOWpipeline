@@ -9,12 +9,13 @@ build_scan_regions(
   chr,
   config,
   chunk = NULL,
-  variant_index = NULL
+  variant_index = NULL,
+  gds_path = NULL
 )
 }
 \arguments{
 \item{region_type}{Character: one of \code{"gene"}, \code{"window"},
-\code{"coding"}.}
+\code{"coding"}, \code{"noncoding"}.}
 
 \item{chr}{Integer or character chromosome.}
 
@@ -28,17 +29,25 @@ used per type: \code{filter_spec} (all); \code{resolved_gene_list}
 \code{chunk_start}, \code{chunk_end}, \code{span_end}. Default NULL.}
 
 \item{variant_index}{A \code{glow_variant_index} of the unit's GDS from
-\code{GLOWr::build_variant_index()}, or NULL (default). Used only by
-\code{region_type = "gene"}, for the large-gene segmentation below.}
+\code{GLOWr::build_variant_index()}, or NULL (default). Used by
+\code{region_type = "gene"}, for the large-gene segmentation below, and by
+\code{"noncoding"}, whose candidate lists are row numbers in it (built
+from \code{gds_path} when NULL).}
+
+\item{gds_path}{Character path of the unit's GDS/aGDS, or NULL (default).
+Required for \code{region_type = "noncoding"}; ignored by the others.}
 }
 \value{
 A named list:
 \describe{
 \item{regions}{A \code{data.frame} with at least \code{chr}, \code{start},
-\code{end}, \code{label} (the \code{define_regions_*} shape).}
+\code{end}, \code{label} (the \code{define_regions_*} shape); for
+\code{noncoding}, a NAMED list of such tables, one per mask, each with
+the \code{n_records}, \code{category}, \code{gene_rank} and
+\code{variant_rows} columns of \code{GLOWr::define_regions_noncoding}.}
 \item{filters}{A single \code{glow_variant_filter} (gene/window) OR a
 named list mapping each category label to a \code{glow_variant_filter}
-(coding).}
+(coding, noncoding).}
 }
 }
 \description{
@@ -78,6 +87,18 @@ mapping labels to a builtin name OR a list of custom DNF annotation clauses
 (resolved via \code{GLOWr::variant_filter} with the run's
 \code{filter_spec}). The MAF/MAC/min-variant axes come from
 \code{config$filter_spec} so a category never hardcodes them.
+
+\strong{\code{region_type = "noncoding"}.} The gene-centric non-coding masks
+(see \code{GLOWr::define_regions_noncoding}). Needs \code{gds_path}, because
+the regions come from the chromosome's annotations, not from gene
+coordinates: the chromosome's QC, type, category and presence vectors are
+read once, and for every mask in \code{config$noncoding_categories} (default
+\code{GLOWr::noncoding_masks()}, the eight masks) one regions table is built
+whose rows are the genes with linked records and whose \code{variant_rows}
+column lists each gene's candidate records. \code{regions} is then a NAMED
+list of those tables, one per mask, and \code{filters} the matching map of
+\code{GLOWr::noncoding_filter(mask, run filter)} (the run's filter with no
+annotation clause). The GDS handle is closed on return.
 }
 \section{Large-gene segmentation (gene)}{
 
@@ -111,6 +132,10 @@ w <- build_scan_regions("window", chr = 22, config = env, chunk = chunk)
 # Coding: a category -> filter map.
 co <- build_scan_regions("coding", chr = 22, config = env)
 names(co$filters)
+# Non-coding: one regions table per mask, from the chromosome's annotations.
+nc <- build_scan_regions("noncoding", chr = 22, config = env,
+                         gds_path = "data/chr22.gds")
+sapply(nc$regions, nrow)
 }
 
 }

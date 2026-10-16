@@ -14,6 +14,9 @@
 #   - window: define_regions_window(...) + the boundary trim (start <= chunk_end)
 #   - coding: define_regions_gene(chr) + a category -> filter map via
 #             resolve_category_filter()
+#   - noncoding: one regions table PER MASK from GLOWr::define_regions_noncoding()
+#             (the grouping pass over the chromosome's annotations, needing the
+#             GDS path) + a mask -> filter map via GLOWr::noncoding_filter()
 #
 # EXPORTED FUNCTIONS:
 #   - build_scan_regions()   regions table + filter(s) for one chr/chunk
@@ -68,8 +71,20 @@
 #' \code{filter_spec}). The MAF/MAC/min-variant axes come from
 #' \code{config$filter_spec} so a category never hardcodes them.
 #'
+#' \strong{\code{region_type = "noncoding"}.} The gene-centric non-coding masks
+#' (see \code{GLOWr::define_regions_noncoding}). Needs \code{gds_path}, because
+#' the regions come from the chromosome's annotations, not from gene
+#' coordinates: the chromosome's QC, type, category and presence vectors are
+#' read once, and for every mask in \code{config$noncoding_categories} (default
+#' \code{GLOWr::noncoding_masks()}, the eight masks) one regions table is built
+#' whose rows are the genes with linked records and whose \code{variant_rows}
+#' column lists each gene's candidate records. \code{regions} is then a NAMED
+#' list of those tables, one per mask, and \code{filters} the matching map of
+#' \code{GLOWr::noncoding_filter(mask, run filter)} (the run's filter with no
+#' annotation clause). The GDS handle is closed on return.
+#'
 #' @param region_type Character: one of \code{"gene"}, \code{"window"},
-#'   \code{"coding"}.
+#'   \code{"coding"}, \code{"noncoding"}.
 #' @param chr Integer or character chromosome.
 #' @param config An environment or named list of resolved config values. Fields
 #'   used per type: \code{filter_spec} (all); \code{resolved_gene_list}
@@ -79,8 +94,12 @@
 #'   \code{region_type = "window"}; ignored otherwise. Must carry
 #'   \code{chunk_start}, \code{chunk_end}, \code{span_end}. Default NULL.
 #' @param variant_index A \code{glow_variant_index} of the unit's GDS from
-#'   \code{GLOWr::build_variant_index()}, or NULL (default). Used only by
-#'   \code{region_type = "gene"}, for the large-gene segmentation below.
+#'   \code{GLOWr::build_variant_index()}, or NULL (default). Used by
+#'   \code{region_type = "gene"}, for the large-gene segmentation below, and by
+#'   \code{"noncoding"}, whose candidate lists are row numbers in it (built
+#'   from \code{gds_path} when NULL).
+#' @param gds_path Character path of the unit's GDS/aGDS, or NULL (default).
+#'   Required for \code{region_type = "noncoding"}; ignored by the others.
 #'
 #' @section Large-gene segmentation (gene):
 #' At whole-genome-sequencing density a gene body can hold tens of thousands
@@ -103,10 +122,13 @@
 #' @return A named list:
 #'   \describe{
 #'     \item{regions}{A \code{data.frame} with at least \code{chr}, \code{start},
-#'       \code{end}, \code{label} (the \code{define_regions_*} shape).}
+#'       \code{end}, \code{label} (the \code{define_regions_*} shape); for
+#'       \code{noncoding}, a NAMED list of such tables, one per mask, each with
+#'       the \code{n_records}, \code{category}, \code{gene_rank} and
+#'       \code{variant_rows} columns of \code{GLOWr::define_regions_noncoding}.}
 #'     \item{filters}{A single \code{glow_variant_filter} (gene/window) OR a
 #'       named list mapping each category label to a \code{glow_variant_filter}
-#'       (coding).}
+#'       (coding, noncoding).}
 #'   }
 #'
 #' @examples
@@ -121,6 +143,10 @@
 #' # Coding: a category -> filter map.
 #' co <- build_scan_regions("coding", chr = 22, config = env)
 #' names(co$filters)
+#' # Non-coding: one regions table per mask, from the chromosome's annotations.
+#' nc <- build_scan_regions("noncoding", chr = 22, config = env,
+#'                          gds_path = "data/chr22.gds")
+#' sapply(nc$regions, nrow)
 #' }
 #'
 #' @seealso \code{GLOWr::define_regions_gene}, \code{GLOWr::define_regions_window},
@@ -128,9 +154,9 @@
 #'   \code{\link{run_scan_unit}}
 #' @export
 build_scan_regions <- function(region_type, chr, config, chunk = NULL,
-                               variant_index = NULL) {
+                               variant_index = NULL, gds_path = NULL) {
 
-  region_type <- match.arg(region_type, c("gene", "window", "coding"))
+  region_type <- match.arg(region_type, c("gene", "window", "coding", "noncoding"))
   filter_spec <- .bsr_get(config, "filter_spec")
   if (is.null(filter_spec)) {
     stop("`config$filter_spec` is required (the list of variant_filter() args).",
@@ -190,6 +216,42 @@ build_scan_regions <- function(region_type, chr, config, chunk = NULL,
     regions <- regions[regions$start <= chunk$chunk_end, , drop = FALSE]
     rownames(regions) <- NULL
     filters <- do.call(GLOWr::variant_filter, filter_spec)
+    return(list(regions = regions, filters = filters))
+  }
+
+  if (region_type == "noncoding") {
+    if (is.null(gds_path)) {
+      stop("`gds_path` is required for region_type = \"noncoding\": the masks ",
+           "group the chromosome's records by their annotations.", call. = FALSE)
+    }
+    stopifnot(file.exists(gds_path))
+    filter <- do.call(GLOWr::variant_filter, filter_spec)
+    categories <- .bsr_get(config, "noncoding_categories")
+    if (is.null(categories)) categories <- GLOWr::noncoding_masks()
+    if (!is.character(categories) || length(categories) == 0L ||
+        !all(categories %in% GLOWr::noncoding_masks()) || anyDuplicated(categories)) {
+      stop("`config$noncoding_categories` must be a character vector of distinct mask ",
+           "names from: ", paste(GLOWr::noncoding_masks(), collapse = ", "), call. = FALSE)
+    }
+    anno_dir <- .bsr_get(config, "Annotation_dir")
+    if (is.null(anno_dir)) anno_dir <- "annotation/info/FunctionalAnnotation"
+    # The grouping handle: opened here, closed on return (before any worker
+    # forks); the chromosome's vectors are read once and shared by the masks.
+    gds <- SeqArray::seqOpen(gds_path, readonly = TRUE, allow.duplicate = TRUE)
+    on.exit(SeqArray::seqClose(gds), add = TRUE)
+    if (is.null(variant_index)) variant_index <- GLOWr::build_variant_index(gds)
+    context <- NULL
+    regions <- list()
+    for (k in categories) {
+      r <- GLOWr::define_regions_noncoding(gds, chr, k, filter,
+                                           variant_index = variant_index,
+                                           context = context, Annotation_dir = anno_dir)
+      context <- attr(r, "context")
+      attr(r, "context") <- NULL            # the vectors stay with this call
+      regions[[k]] <- r
+    }
+    filters <- stats::setNames(
+      lapply(categories, function(k) GLOWr::noncoding_filter(k, filter)), categories)
     return(list(regions = regions, filters = filters))
   }
 

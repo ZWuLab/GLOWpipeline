@@ -193,3 +193,41 @@ test_that("gene segmentation tiles genes above gene_max_records into gene_segmen
   expect_equal(r_big$label, gl$label)
   expect_equal(attr(r_big, "n_genes_segmented"), 0L)
 })
+
+
+test_that("noncoding requires gds_path, returns per-mask regions and filters, honors noncoding_categories", {
+  agds <- tempfile(fileext = ".gds")
+  create_test_agds(agds)
+  on.exit(unlink(agds), add = TRUE)
+  env <- new.env(); env$filter_spec <- list(rare_maf_cutoff = 0.5, variant_type = "SNV",
+                                            min_mac = 1L, min_variants = 1L)
+  expect_error(build_scan_regions("noncoding", chr = 22, config = env), "gds_path")
+  env$noncoding_categories <- c("upstream", "enhancer_DHS", "ncRNA")
+  out <- build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds)
+  expect_equal(names(out$regions), c("upstream", "enhancer_DHS", "ncRNA"))
+  expect_equal(names(out$filters), c("upstream", "enhancer_DHS", "ncRNA"))
+  for (k in names(out$regions)) {
+    r <- out$regions[[k]]
+    expect_s3_class(r, "data.frame")
+    expect_true(all(c("region_id", "chr", "start", "end", "label", "n_records",
+                      "category", "gene_rank", "variant_rows") %in% names(r)))
+    expect_true(all(r$category == k))
+    expect_null(attr(r, "context"))                      # the vectors stay with the build
+    expect_s3_class(out$filters[[k]], "glow_variant_filter")
+    expect_equal(attr(out$filters[[k]], "category_name"), k)
+    expect_null(out$filters[[k]]$annotation_clauses)
+    expect_equal(out$filters[[k]]$rare_maf_cutoff, 0.5)
+  }
+  # The fixture's genes are not in the bundled table, so the protein-coding
+  # masks link nothing; the ncRNA mask links the two bundled chromosome 22
+  # ncRNA genes planted in the fixture.
+  expect_equal(nrow(out$regions$upstream), 0L)
+  expect_equal(out$regions$ncRNA$label, c("POTEH-AS1", "LINC01297"))
+  # The default is the eight masks; an unknown name stops.
+  env$noncoding_categories <- NULL
+  out8 <- build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds)
+  expect_equal(names(out8$regions), GLOWr::noncoding_masks())
+  env$noncoding_categories <- c("upstream", "plof")
+  expect_error(build_scan_regions("noncoding", chr = 22, config = env, gds_path = agds),
+               "noncoding_categories")
+})

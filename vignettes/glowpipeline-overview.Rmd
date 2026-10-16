@@ -114,22 +114,79 @@ builds the chunk's regions and filters and runs `glow_scan_chunk()` over them,
 persisting the results. In a cluster job this is the per-array-task call:
 
 ```{r scan, eval=FALSE}
-# `gds_path` and the null-model / weight inputs come from the shared setup.
+# `gds_path` and the null-model / weight inputs come from the shared setup;
+# one of spine$b_func and spine$b_model is NULL, the other the B source.
+k <- 1L                                   # this task's chunk (SLURM_ARRAY_TASK_ID)
 run_scan_unit(
   gds_path          = gds_path,
   null_model        = spine$null_model,
   pi_models         = spine$pi_models,
   pi_features       = spine$pi_features,
   reference_medians = spine$reference_medians,
+  b_func            = spine$b_func,
+  b_model           = spine$b_model,
   region_type       = "window",
   config            = config,
-  output_dir        = "scan_out"
+  chunk             = chunks[k, ],        # one row of define_genome_chunks()
+  results_path      = file.path("scan_out", "results", sprintf("scan_chunk_%d.csv", k)),
+  output_dir        = "scan_out",
+  output_policy     = policy
+)
+```
+
+The gene-centric non-coding masks are the same call with `region_type = "noncoding"`
+and a chromosome in place of a chunk; `config$noncoding_categories` selects the masks
+(default all eight) and `n_cores` the forked workers:
+
+```{r scan-noncoding, eval=FALSE}
+run_scan_unit(
+  gds_path          = gds_path,
+  null_model        = spine$null_model,
+  pi_models         = spine$pi_models,
+  pi_features       = spine$pi_features,
+  reference_medians = spine$reference_medians,
+  b_func            = spine$b_func,
+  b_model           = spine$b_model,
+  region_type       = "noncoding",
+  config            = config,
+  chr               = 22,
+  results_path      = file.path("scan_out", "results-glow", "glow_noncoding_chr22.csv"),
+  output_dir        = "scan_out",
+  output_policy     = policy,
+  n_cores           = 4
 )
 ```
 
 `glow_scan_chunk()` returns a list whose `results` element is the flat
 per-window table (one row per non-skipped window, with the window coordinates,
 variant counts, and the GLOW test p-values).
+
+`region_type` selects how the unit's SNV sets are formed, and the same call
+serves all four types. A unit holds many regions, and GLOW tests one set per
+region: the region says which variants are candidates, and the filter
+(`config$filter_spec`: QC label, variant type, MAF and MAC cutoffs, minimum set
+size) says which candidates stay.
+
+- `"gene"`: one set per gene of the bundled gene table (or of
+  `config$resolved_gene_list`), every record in the gene's span. A gene with
+  more records than `config$gene_max_records` is tiled into segments.
+- `"window"`: one set per sliding window of a genome chunk (`chunk`), every
+  record in the window.
+- `"coding"`: one set per gene and coding mask (`config$categories`), the
+  records in the gene's span whose coding annotation matches the mask.
+- `"noncoding"`: one set per gene and gene-centric non-coding mask
+  (`config$noncoding_categories`, the eight masks of `GLOWr::noncoding_masks()`),
+  the records anywhere on the chromosome whose annotation links them to the
+  gene. `build_scan_regions()` groups the chromosome's records once per mask
+  with `GLOWr::define_regions_noncoding()`, which needs the aGDS path. The
+  rows of the per-unit table carry the mask as `category`.
+
+With `n_cores` above 1 the unit's regions run on forked workers, scheduled by
+their record counts. A region's cost is its squared record count. A region
+whose cost reaches the unit's total cost divided by 8 times `n_cores` runs
+alone, the rest are packed into blocks of at most 25 regions whose summed cost
+stays within that threshold, and the blocks run heaviest first. The written
+table is the single-core one.
 
 ## 4. Aggregate and summarize
 
@@ -150,6 +207,35 @@ agg$scan_sig_windows   # the significant windows
 ```
 
 For a gene-centric coding scan, `aggregate_coding_results()` is the analog.
+It reads `results-glow/glow_coding_chr<N>.csv` under `output_dir`. The
+gene-centric non-coding masks use it too: `result_prefix = "glow_noncoding"`
+reads their per-chromosome tables, `type_label = "noncoding"` names the
+returned tables, `gene_anchor` (from `noncoding_gene_anchor()`) orders a
+gene's masks together although their spans differ, and `family_alpha` sets
+the across-mask cutoff, which is `family_alpha` divided by the number of
+tested (gene, mask) cells. Its `thresholds` table lists every cutoff with its
+denominator, and its `completeness_table` one row per requested chromosome.
+`staar_modes = character(0)` reads no native STAARpipeline tables; the
+comparator columns inside the GLOW tables are kept either way.
+
+```{r aggregate-noncoding, eval=FALSE}
+tbl <- do.call(rbind, lapply(1:22, function(k) read.csv(
+  sprintf("scan_out/results-glow/glow_noncoding_chr%d.csv", k),
+  stringsAsFactors = FALSE, colClasses = c(chr = "character"))))
+nc <- aggregate_coding_results(
+  output_dir        = "scan_out",
+  chroms            = 1:22,
+  gene_num_in_array = 500,
+  staar_modes       = character(0),
+  result_prefix     = "glow_noncoding",
+  type_label        = "noncoding",
+  family_alpha      = 0.05,
+  gene_anchor       = noncoding_gene_anchor(tbl)
+)
+nc$noncoding_merged
+nc$thresholds
+nc$completeness_table
+```
 
 Genomic-control diagnostics come from `summarize_qq_and_lambdas()`, which
 computes per-test lambda values and writes QQ plots:
@@ -164,9 +250,13 @@ summarize_qq_and_lambdas(
 )
 ```
 
-Run completeness, run-log parsing, and per-error variant drill-downs are
-available via `check_scan_completeness()`, `parse_chr_log()` /
-`parse_chunk_log()`, and `write_error_drilldowns()`.
+For the gene and window routes, run completeness, run-log parsing and
+per-error variant drill-downs are available via `check_scan_completeness()`
+(chunks), `parse_chr_log()` / `parse_chunk_log()` and `write_error_drilldowns()`.
+The non-coding route writes its errors and its per-mask tallies beside each
+per-chromosome table instead (`<stem>_errors.csv`, `<stem>_summary.csv`), which
+`aggregate_coding_results()` reads into its `completeness_table`; a candidate
+list has no interval for a drill-down.
 
 ## Where to go next
 

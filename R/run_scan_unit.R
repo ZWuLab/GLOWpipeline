@@ -12,6 +12,9 @@
 #      then rbind, gene-first column order AND a gene-first (start, category) ROW
 #      sort so the on-disk per-chr order is gene-first -- design Q6)
 #   3. write the per-unit flat results CSV + policy-gated sidecars + a log line.
+# With n_cores > 1 each regions table is scheduled over forked workers by size
+# (heavy regions alone, cost-budgeted blocks, heaviest first) and the outputs
+# are restored to the table's order by label; labels must be unique.
 # region_summary is turned ON for region_type %in% c("gene") (covers gene and
 # custom-gene-list scans, which dispatch via region_type = "gene") and OFF
 # otherwise, reproducing the gene scan's 7 summary columns while leaving the
@@ -28,7 +31,12 @@
 #   - .rsu_get()        Read one config field from an env/list.
 #   - .rsu_null_or()    a if non-NULL else b.
 #   - .rsu_write_table() Write a results table as CSV or fst.
-#   - .rsu_merge_chunk_outputs() Merge per-block engine outputs (n_cores > 1).
+#   - .rsu_check_unique_labels() Stop when a regions table repeats a label.
+#   - .rsu_region_records() GDS records per region (the cost proxy's input).
+#   - .rsu_form_blocks() The size-aware block former (heavy regions alone,
+#                        cost-budgeted blocks, dispatch by block cost).
+#   - .rsu_merge_chunk_outputs() Merge per-block engine outputs (n_cores > 1)
+#                        and restore the regions table's order by label.
 #   - .rsu_stack_summaries() Stack per-category summaries into one row.
 
 
@@ -74,8 +82,9 @@
 #'   \code{reference_medians} is this unit's chromosome's annotation-median cache.
 #' @param b_func,b_model The B source (exactly one non-NULL), passed to the
 #'   engine.
-#' @param region_type Character: \code{"gene"}, \code{"window"}, or
-#'   \code{"coding"}.
+#' @param region_type Character: \code{"gene"}, \code{"window"},
+#'   \code{"coding"} or \code{"noncoding"} (the gene-centric non-coding masks,
+#'   see the section below).
 #' @param config An environment or named list of resolved config values. Used for
 #'   the region/filter build (see \code{\link{build_scan_regions}}) and the engine
 #'   knobs \code{ld_threshold}, \code{mac_threshold}, \code{collapse_method},
@@ -103,16 +112,39 @@
 #'   NULL.
 #' @param n_cores Integer or NULL (default). Forked workers for this unit. NULL
 #'   reads \code{config$n_cores} and falls back to 1. With more than one, the
-#'   regions are split into blocks of 25 consecutive regions, each block runs
-#'   \code{\link{glow_scan_chunk}} in a forked worker with its own GDS handle
-#'   (\code{parallel::mclapply}, dynamic scheduling so a block with a large
-#'   gene does not hold the others), and the block outputs are merged in block
-#'   order, so the written table equals the single-core one. The progress
-#'   callback is off inside the workers; the parent logs one line per finished
-#'   block. Forking is unavailable on Windows (a value above 1 warns and runs
-#'   serially). Memory scales with the workers, since each holds its own
-#'   genotype and LD matrices.
+#'   regions are grouped into blocks by size (see the section "Scheduling over
+#'   the workers"), each block runs \code{\link{glow_scan_chunk}} in a forked
+#'   worker with its own GDS handle (\code{parallel::mclapply}, dynamic
+#'   dispatch), and the block outputs are merged and restored to the regions
+#'   table's order by label, so the written table equals the single-core one.
+#'   The progress callback is off inside the workers; the parent logs one
+#'   scheduler line per regions table and one line per finished block. Forking
+#'   is unavailable on Windows (a value above 1 warns and runs serially).
+#'   Memory scales with the workers, since each holds its own genotype and LD
+#'   matrices.
 #' @param verbose Integer threaded to the engine. Default 0.
+#'
+#' @section Gene-centric non-coding masks:
+#' For \code{region_type = "noncoding"} the unit is a chromosome and
+#' \code{\link{build_scan_regions}} returns one regions table per mask of
+#' \code{config$noncoding_categories} (default the eight masks of
+#' \code{GLOWr::noncoding_masks()}), built once from the chromosome's
+#' annotations by \code{GLOWr::define_regions_noncoding}. Each mask's table is
+#' run like a coding category (the label check, \code{max_regions} and the
+#' scheduler apply per table; \code{region_summary} is off), the rows are
+#' tagged with \code{category}, and the combined table leads with
+#' \code{label, chr, category} and is sorted gene-first by the gene anchor of
+#' \code{\link{noncoding_gene_anchor}} (a gene's masks together, because their
+#' candidate spans differ), then by mask. A row's \code{start}, \code{end} and
+#' \code{midpoint} describe the candidate span, which is wide for an enhancer
+#' far from its gene. Two sidecars are written beside the flat table on every
+#' completed unit, for the aggregation's completeness table: the error table as
+#' \code{<results_path stem>_errors.csv} (zero rows when no cell errored, so a
+#' rerun never leaves an earlier run's errors beside a clean table) and the
+#' per-mask tallies (cells attempted, tested, skipped for an empty set or a
+#' single rare variant, errored) as \code{<results_path stem>_summary.csv}.
+#' The log carries one line per mask with the genes, the selected records and
+#' the links.
 #'
 #' @section Large genes:
 #' For \code{region_type = "gene"} the unit's variant index is passed to
@@ -120,6 +152,34 @@
 #' records than \code{config$gene_max_records} into segments of
 #' \code{config$gene_segment_bp} (see that function). The log states how many
 #' genes were segmented and into how many segments.
+#'
+#' @section Scheduling over the workers:
+#' With \code{n_cores > 1} the regions of a table are not run in genomic order.
+#' Heavy genes sit next to each other on the genome, and a block of consecutive
+#' regions that holds several of them keeps one worker busy long after the
+#' others have finished. Instead, every region's GDS record count \eqn{n_i} is
+#' read from the unit's variant index (two binary searches per region, no
+#' genotype read; the gene segmentation's \code{n_records} is reused where
+#' present) and its cost is taken as \eqn{c_i = n_i^2}, a heuristic that lets a
+#' few heavy regions dominate the sums. With \eqn{C = \sum_i c_i} and
+#' \eqn{\tau = C / (8\,\mathrm{n\_cores})}, a region with \eqn{c_i \ge \tau}
+#' forms a block of its own; the remaining regions, in decreasing cost, are
+#' packed into blocks that close at 25 regions or when the next region would
+#' push the summed cost above \eqn{\tau}; and the blocks are dispatched in
+#' decreasing summed cost, so the heaviest work starts first and the light
+#' blocks fill the tail. When \eqn{C = 0} the regions keep their order in blocks
+#' of 25. Each region is computed independently of its block, so the merged
+#' rows are the serial ones; the merge puts the flat rows, the error rows and
+#' the sidecar entries back in the order of the labels in the regions table.
+#' This needs unique labels, which the function enforces at every
+#' \code{n_cores}: a repeated label stops the run with the duplicates named,
+#' because the sidecars and the error table are keyed by label and a duplicate
+#' already loses information silently in the serial path. For the coding type
+#' each category's pass over the gene table is scheduled this way, one category
+#' after another. The log's scheduler line gives the number of blocks, how many
+#' are a heavy region alone, the heaviest region and \eqn{\tau}; each block line
+#' gives the block's region count, its heaviest record count, its tally and
+#' its wall time, so the reader sees where the unit's time went.
 #'
 #' @return Invisibly, a named list with \code{results} (the written flat table),
 #'   \code{summary} (a 1-row tally; the engine summary for gene/window, or a
@@ -155,8 +215,21 @@ run_scan_unit <- function(gds_path,
                           progress_every = 0L,
                           logger = NULL, n_cores = NULL, verbose = 0) {
 
-  region_type <- match.arg(region_type, c("gene", "window", "coding"))
+  region_type <- match.arg(region_type, c("gene", "window", "coding", "noncoding"))
   log_msg <- if (is.null(logger)) function(...) invisible(NULL) else logger
+
+  # The comparator's annotation columns must be among the extracted ones
+  # (pi_features); otherwise every region would error at the comparator step
+  # and the unit would end with no comparator value at all.
+  if (!is.null(staar_context) && !is.null(staar_context$anno_cols)) {
+    miss <- setdiff(staar_context$anno_cols, pi_features)
+    if (length(miss) > 0L) {
+      stop("staar_context$anno_cols names annotation column(s) that are not among ",
+           "pi_features, the columns extracted for every region: ",
+           paste(miss, collapse = ", "),
+           ". Pass anno_cols as a subset of pi_features.", call. = FALSE)
+    }
+  }
 
   # ---- Cores: the argument, else the config field, else 1 ----
   if (is.null(n_cores)) n_cores <- .rsu_null_or(.rsu_get(config, "n_cores"), 1L)
@@ -203,21 +276,47 @@ run_scan_unit <- function(gds_path,
   variant_index <- GLOWr::build_variant_index(gds_path)
 
   # ---- Build regions + filter(s) for this unit ----
-  built   <- build_scan_regions(region_type, chr, config, chunk = chunk,
-                                variant_index = variant_index)
-  regions <- built$regions
-  n_seg_genes <- attr(regions, "n_genes_segmented")
-  if (!is.null(n_seg_genes)) {
-    log_msg(sprintf(paste0("gene segmentation: %d gene(s) above gene_max_records = %s ",
-                           "records tiled into %d segment(s) of %s bp"),
-                    n_seg_genes, format(.rsu_get(config, "gene_max_records")),
-                    attr(regions, "n_segments"),
-                    format(.rsu_null_or(.rsu_get(config, "gene_segment_bp"), 10000L))))
+  built <- build_scan_regions(region_type, chr, config, chunk = chunk,
+                              variant_index = variant_index, gds_path = gds_path)
+  if (is.data.frame(built$regions)) {
+    n_seg_genes <- attr(built$regions, "n_genes_segmented")
+    if (!is.null(n_seg_genes)) {
+      log_msg(sprintf(paste0("gene segmentation: %d gene(s) above gene_max_records = %s ",
+                             "records tiled into %d segment(s) of %s bp"),
+                      n_seg_genes, format(.rsu_get(config, "gene_max_records")),
+                      attr(built$regions, "n_segments"),
+                      format(.rsu_null_or(.rsu_get(config, "gene_segment_bp"), 10000L))))
+    }
+  } else {                                     # noncoding: one table per mask
+    for (k in names(built$regions)) {
+      r <- built$regions[[k]]
+      log_msg(sprintf(paste0("noncoding mask %-14s: %d gene(s) with linked records, ",
+                             "%d record(s) selected, %d (gene, record) link(s)"),
+                      k, nrow(r), .rsu_null_or(attr(r, "n_selected_records"), NA_integer_),
+                      .rsu_null_or(attr(r, "n_linked_records"), NA_integer_)))
+    }
   }
-  if (!is.na(max_regions)) {
-    regions <- regions[seq_len(min(max_regions, nrow(regions))), , drop = FALSE]
-    log_msg(sprintf("max_regions %d: limiting to %d regions",
-                    max_regions, nrow(regions)))
+  # Labels are the key of the sidecars, the error table and the parallel merge,
+  # so a repeated label stops the run at every n_cores (plan 12-size-aware, D6).
+  # max_regions caps a regions table: the unit's table, or each mask's table.
+  prepare_regions <- function(regs, what) {
+    if (!"label" %in% names(regs)) {           # the engine's default label
+      regs$label <- paste0("chr", regs$chr, ":", regs$start, "-", regs$end)
+    }
+    .rsu_check_unique_labels(regs)
+    if (!is.na(max_regions) && nrow(regs) > max_regions) {
+      regs <- regs[seq_len(max_regions), , drop = FALSE]
+      log_msg(sprintf("max_regions %d: limiting %s to %d regions",
+                      max_regions, what, nrow(regs)))
+    }
+    regs
+  }
+  if (is.data.frame(built$regions)) {
+    regions <- prepare_regions(built$regions, "the unit")
+  } else {
+    built$regions <- lapply(stats::setNames(names(built$regions), names(built$regions)),
+                            function(k) prepare_regions(built$regions[[k]], paste("mask", k)))
+    regions <- NULL
   }
 
   # One engine call over a regions table; the progress callback only when the
@@ -239,52 +338,79 @@ run_scan_unit <- function(gds_path,
       verbose = verbose)
   }
 
-  run_one <- function(filter_spec) {
-    if (n_cores == 1L || nrow(regions) <= 1L) {
-      return(engine_call(regions, filter_spec, in_parent = TRUE))
+  # The schedule of one regions table over the workers (the roxygen section
+  # "Scheduling over the workers"): NULL means the serial path. Computed once
+  # per table and logged once, so the coding categories share one schedule.
+  schedule_of <- function(regs) {
+    if (n_cores == 1L || nrow(regs) <= 1L) return(NULL)
+    n_rec  <- .rsu_region_records(regs, variant_index)
+    blocks <- .rsu_form_blocks(n_rec^2, n_cores)
+    heaviest <- which.max(n_rec)
+    log_msg(sprintf(paste0("scheduler (n_cores = %d): %d regions in %d blocks, %d ",
+                           "of them a heavy region alone; heaviest %s with %d ",
+                           "records; cost = records^2, block budget tau = %.4g"),
+                    n_cores, nrow(regs), length(blocks),
+                    attr(blocks, "n_singletons"), as.character(regs$label[heaviest]),
+                    as.integer(n_rec[heaviest]), attr(blocks, "tau")))
+    list(blocks = blocks, n_records = n_rec)
+  }
+
+  run_one <- function(regs, filter_spec, sched = NULL) {
+    if (is.null(sched)) {
+      return(engine_call(regs, filter_spec, in_parent = TRUE))
     }
-    # Blocks of 25 consecutive regions, one forked worker per block, dynamic
-    # scheduling (mc.preschedule = FALSE) so a block holding a large gene does
-    # not hold the rest. The outputs come back in block order and are merged
-    # in that order, so the table is the serial one.
-    block_size <- 25L
-    blocks <- split(seq_len(nrow(regions)),
-                    ceiling(seq_len(nrow(regions)) / block_size))
-    log_msg(sprintf("n_cores = %d: %d regions in %d blocks of up to %d",
-                    n_cores, nrow(regions), length(blocks), block_size))
+    # One forked worker per block, the blocks handed out heaviest first as
+    # workers free up (mc.preschedule = FALSE). Each region is computed
+    # independently of its block, so the merge below only has to put the rows
+    # back in the table's order.
+    blocks <- sched$blocks
     t_par <- proc.time()[["elapsed"]]
     outs <- parallel::mclapply(
       blocks,
-      function(idx) engine_call(regions[idx, , drop = FALSE], filter_spec,
+      function(idx) engine_call(regs[idx, , drop = FALSE], filter_spec,
                                 in_parent = FALSE),
       mc.cores = n_cores, mc.preschedule = FALSE)
     failed <- vapply(outs, function(o) inherits(o, "try-error"), logical(1))
     if (any(failed)) {
       k <- which(failed)[1L]
-      stop(sprintf("run_scan_unit: worker for block %d (regions %d-%d) failed: %s",
-                   k, min(blocks[[k]]), max(blocks[[k]]),
+      stop(sprintf("run_scan_unit: worker for block %d (%d region(s): %s) failed: %s",
+                   k, length(blocks[[k]]),
+                   paste(utils::head(as.character(regs$label[blocks[[k]]]), 5L),
+                         collapse = ", "),
                    as.character(outs[[k]])), call. = FALSE)
     }
     for (k in seq_along(outs)) {
       sm <- outs[[k]]$summary
-      log_msg(sprintf("block %d/%d: regions %d-%d, n_ok=%d n_skip_empty=%d n_error=%d %.1fs",
-                      k, length(outs), min(blocks[[k]]), max(blocks[[k]]),
+      log_msg(sprintf(paste0("block %d/%d: %d region(s), heaviest %d records, ",
+                             "n_ok=%d n_skip_empty=%d n_error=%d %.1fs"),
+                      k, length(outs), length(blocks[[k]]),
+                      as.integer(max(sched$n_records[blocks[[k]]])),
                       sm$n_ok, sm$n_skip_empty, sm$n_error, sm$runtime_secs))
     }
     .rsu_merge_chunk_outputs(outs, wall_secs = proc.time()[["elapsed"]] - t_par,
-                             region_summary = region_summary)
+                             region_summary = region_summary,
+                             labels = as.character(regs$label))
   }
 
-  # ---- Run: ONCE (gene/window) or ONCE PER CATEGORY (coding) ----
+  # ---- Run: ONCE (gene/window) or ONCE PER CATEGORY (coding, noncoding) ----
   evidence_acc <- list(); staar_detail_acc <- list(); result_objects_acc <- list()
 
-  if (region_type == "coding") {
+  if (region_type %in% c("coding", "noncoding")) {
     category_labels <- names(built$filters)
     acc <- list(); err_rows <- list(); summaries <- list()
-    log_msg(sprintf("Starting coding chr%s: %d genes, %d categories",
-                    chr, nrow(regions), length(category_labels)))
+    if (region_type == "coding") {
+      log_msg(sprintf("Starting coding chr%s: %d genes, %d categories",
+                      chr, nrow(regions), length(category_labels)))
+      sched_shared <- schedule_of(regions)     # the categories share the gene table
+    } else {
+      log_msg(sprintf("Starting noncoding chr%s: %d masks (%s), %d (gene, mask) cells",
+                      chr, length(category_labels), paste(category_labels, collapse = ", "),
+                      sum(vapply(built$regions, nrow, integer(1)))))
+    }
     for (category in category_labels) {
-      out <- run_one(built$filters[[category]])
+      regs  <- if (region_type == "coding") regions else built$regions[[category]]
+      sched <- if (region_type == "coding") sched_shared else schedule_of(regs)
+      out <- run_one(regs, built$filters[[category]], sched)
       if (nrow(out$results) > 0L) out$results$category <- category
       acc[[category]] <- out$results
       summaries[[category]] <- out$summary
@@ -317,18 +443,36 @@ run_scan_unit <- function(gds_path,
       # (the rbind above is category-grouped); this re-sort only changes ROW ORDER
       # (sub-phase 2c -- the one intended change vs 2b's category-outer on-disk
       # order; verified content-identical after a (label, category) key sort).
-      if ("start" %in% names(res)) {
+      if (region_type == "coding" && "start" %in% names(res)) {
         res <- res[order(res$start, res$category), , drop = FALSE]
+      } else if (region_type == "noncoding") {
+        # A gene's masks have different candidate spans, so the gene-first
+        # order uses the gene anchor (the bundled gene table's start for a
+        # protein-coding gene, the first candidate position for an ncRNA gene).
+        anchor <- noncoding_gene_anchor(res)
+        a <- anchor$anchor[match(paste(res$chr, res$label), paste(anchor$chr, anchor$gene))]
+        res <- res[order(a, res$label, res$category), , drop = FALSE]
       }
       rownames(res) <- NULL
     }
     errors <- if (length(err_rows) > 0L) do.call(rbind, err_rows) else
       data.frame(category = character(0L), label = character(0L),
-                 message = character(0L))
-    # One stacked summary row (sum the per-category tallies, max runtime).
+                 message = character(0L), stringsAsFactors = FALSE)
+    errors <- errors[, c("category", "label", "message"), drop = FALSE]  # stable schema
+    rownames(errors) <- NULL
+    # One stacked summary row (sum the per-category tallies, max runtime), and
+    # the per-category tallies themselves (the noncoding summary sidecar).
     summary <- .rsu_stack_summaries(summaries)
+    summary_by_category <- do.call(rbind, lapply(names(summaries), function(k) {
+      s <- summaries[[k]]
+      data.frame(category = k, n_attempted = as.integer(s$n_windows),
+                 n_ok = as.integer(s$n_ok), n_skip_empty = as.integer(s$n_skip_empty),
+                 n_staar_skip_single = as.integer(s$n_staar_skip_single),
+                 n_error = as.integer(s$n_error), runtime_secs = s$runtime_secs,
+                 stringsAsFactors = FALSE)
+    }))
   } else {
-    out <- run_one(built$filters)
+    out <- run_one(regions, built$filters, schedule_of(regions))
     res <- out$results
     rownames(res) <- NULL
     errors  <- out$errors
@@ -351,6 +495,20 @@ run_scan_unit <- function(gds_path,
   dir.create(dirname(results_path), recursive = TRUE, showWarnings = FALSE)
   .rsu_write_table(res, results_path, output_format)
   log_msg(sprintf("Wrote %s (%d rows)", results_path, nrow(res)))
+  # The noncoding sidecars for the aggregation's completeness table: the error
+  # rows and the per-mask tallies (cells attempted, tested, skipped, errored).
+  # Both are written on every completed unit, the errors table with zero rows
+  # when no cell errored, so a rerun never leaves an earlier run's errors file
+  # beside a clean table.
+  if (region_type == "noncoding") {
+    stem  <- sub("\\.(csv|fst)$", "", basename(results_path))
+    p_err <- file.path(dirname(results_path), paste0(stem, "_errors.csv"))
+    utils::write.csv(errors, p_err, row.names = FALSE)
+    log_msg(sprintf("Wrote %s (%d error row(s))", p_err, nrow(errors)))
+    p_sum <- file.path(dirname(results_path), paste0(stem, "_summary.csv"))
+    utils::write.csv(summary_by_category, p_sum, row.names = FALSE)
+    log_msg(sprintf("Wrote %s (%d mask row(s))", p_sum, nrow(summary_by_category)))
+  }
 
   # ---- Policy-gated sidecars (own on-demand folders; no orphans) ----
   if (isTRUE(output_policy$write_evidence) && length(evidence_acc) > 0L) {
@@ -424,31 +582,152 @@ run_scan_unit <- function(gds_path,
   }
 }
 
+#' Stop When a Regions Table Repeats a Label
+#'
+#' The sidecars of \code{glow_scan_chunk()} are keyed by label and its error
+#' table carries only labels, so a repeated label already loses information
+#' silently in the serial path, and the parallel merge restores the table's
+#' order by label. The bundled gene table has no repeated symbol within a
+#' chromosome, window labels encode their coordinates and segment labels carry
+#' their index; a user-supplied gene list is what this check is for.
+#'
+#' @param regions A regions table with a \code{label} column.
+#' @return Invisibly TRUE; stops otherwise, naming the duplicates.
+#' @keywords internal
+#' @noRd
+.rsu_check_unique_labels <- function(regions) {
+  lab <- as.character(regions$label)
+  dup <- unique(lab[duplicated(lab)])
+  if (length(dup) > 0L) {
+    stop(sprintf(paste0("run_scan_unit: the unit's regions carry %d repeated ",
+                        "label(s): %s%s. Labels must be unique, because the ",
+                        "sidecars and the error table are keyed by label."),
+                 length(dup), paste(utils::head(dup, 10L), collapse = ", "),
+                 if (length(dup) > 10L) ", ..." else ""), call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
+#' GDS Records of Every Region (the Scheduler's Cost Input)
+#'
+#' Reuses the table's \code{n_records} column where the gene segmentation
+#' attached it (or the gene-centric non-coding builder, whose candidate count
+#' is the right size for a set whose descriptive span is wide), and otherwise
+#' counts the records in each span from the variant index with
+#' \code{GLOWr::count_index_records()}: two binary searches per region when
+#' the chromosome's positions are sorted, no genotype read. A missing count
+#' is taken as 0.
+#'
+#' @param regions A regions table (\code{chr}, \code{start}, \code{end}).
+#' @param variant_index A \code{glow_variant_index} of the unit's GDS.
+#' @return A numeric vector of counts, one per row.
+#' @keywords internal
+#' @noRd
+.rsu_region_records <- function(regions, variant_index) {
+  if (nrow(regions) == 0L) return(numeric(0))
+  n <- if ("n_records" %in% names(regions)) as.numeric(regions$n_records) else
+    as.numeric(GLOWr::count_index_records(variant_index, regions$chr,
+                                          regions$start, regions$end))
+  n[is.na(n)] <- 0
+  n
+}
+
+#' Form the Size-Aware Blocks of a Regions Table
+#'
+#' The block former of the scheduler (plan 12-size-aware-scheduling, section
+#' 4.3). With \eqn{C = \sum_i c_i > 0} and \eqn{\tau = C / (8 m)} for
+#' \code{m = n_cores}: the regions are sorted by decreasing cost (ties by row
+#' index), every region with \eqn{c_i \ge \tau} becomes a block of its own, the
+#' rest are packed in sorted order into blocks that close at \code{block_size}
+#' regions or when the next region would push the summed cost above
+#' \eqn{\tau}, and the blocks are ordered by decreasing summed cost (ties by
+#' formation order). With \eqn{C = 0} the rows keep their order in blocks of
+#' \code{block_size}. Every row lands in exactly one block.
+#'
+#' @param cost Numeric vector of region costs (non-negative; NA counts as 0).
+#' @param n_cores Integer, the workers.
+#' @param block_size Integer, the cap on a packed block (25).
+#' @return A list of integer row-index vectors, heaviest block first, with the
+#'   attributes \code{tau}, \code{n_singletons} and \code{block_cost}.
+#' @keywords internal
+#' @noRd
+.rsu_form_blocks <- function(cost, n_cores, block_size = 25L) {
+  n <- length(cost)
+  cost <- as.numeric(cost)
+  cost[is.na(cost)] <- 0
+  if (n == 0L) {
+    return(structure(list(), tau = 0, n_singletons = 0L, block_cost = numeric(0)))
+  }
+  total <- sum(cost)
+  if (total <= 0) {
+    blocks <- unname(split(seq_len(n), ceiling(seq_len(n) / block_size)))
+    return(structure(blocks, tau = 0, n_singletons = 0L,
+                     block_cost = numeric(length(blocks))))
+  }
+  tau <- total / (8 * n_cores)
+  ord <- order(-cost, seq_len(n))                 # decreasing cost, ties by row
+  heavy <- cost[ord] >= tau
+  singles <- as.list(ord[heavy])                  # one heavy region per block
+  packed <- list()
+  cur <- integer(0); cur_cost <- 0
+  for (i in ord[!heavy]) {                        # light regions, sorted order
+    if (length(cur) > 0L &&
+        (length(cur) >= block_size || cur_cost + cost[i] > tau)) {
+      packed[[length(packed) + 1L]] <- cur
+      cur <- integer(0); cur_cost <- 0
+    }
+    cur <- c(cur, i); cur_cost <- cur_cost + cost[i]
+  }
+  if (length(cur) > 0L) packed[[length(packed) + 1L]] <- cur
+  blocks <- c(singles, packed)
+  block_cost <- vapply(blocks, function(b) sum(cost[b]), numeric(1))
+  o <- order(-block_cost, seq_along(blocks))      # heaviest block first
+  structure(blocks[o], tau = tau, n_singletons = length(singles),
+            block_cost = block_cost[o])
+}
+
 #' Merge the Per-Block Outputs of glow_scan_chunk() Into One
 #'
 #' Row-binds the flat tables, concatenates the evidence, STAAR-detail and
 #' result-object lists, row-binds the error tables, and sums the summary
 #' tally, with the wall time of the whole parallel call as \code{runtime_secs}.
-#' Block order is preserved, so the merged table equals the serial one.
+#' With \code{labels} (the regions table's labels, in its order) the flat rows,
+#' the error rows and the sidecar entries are put back in that order, so the
+#' merged output equals the serial one whatever the block membership; without
+#' it, block order is preserved.
 #'
 #' @param outs A list of \code{glow_scan_chunk()} outputs, in block order.
 #' @param wall_secs Numeric wall time of the parallel call.
 #' @param region_summary Logical, for the empty-table schema.
+#' @param labels Character, the unique labels of the regions table in its
+#'   order, or NULL.
 #' @return One \code{glow_scan_chunk()}-shaped list.
 #' @keywords internal
 #' @noRd
-.rsu_merge_chunk_outputs <- function(outs, wall_secs, region_summary = FALSE) {
+.rsu_merge_chunk_outputs <- function(outs, wall_secs, region_summary = FALSE,
+                                     labels = NULL) {
   tabs <- lapply(outs, `[[`, "results")
   tabs <- tabs[vapply(tabs, nrow, integer(1)) > 0L]
   results <- if (length(tabs) == 0L) .empty_scan_results(region_summary) else
     do.call(rbind, tabs)
   rownames(results) <- NULL
+  # The order of the regions table, by label (unique by the D6 check).
+  by_label <- function(x, key) {
+    if (is.null(labels) || length(key) == 0L) return(x)
+    x[order(match(as.character(key), labels)), , drop = FALSE]
+  }
   cat_lists <- function(field) {
     parts <- lapply(outs, `[[`, field)
     if (all(vapply(parts, is.null, logical(1)))) return(NULL)
-    do.call(c, parts[!vapply(parts, is.null, logical(1))])
+    out <- do.call(c, parts[!vapply(parts, is.null, logical(1))])
+    if (!is.null(labels) && length(out) > 0L && !is.null(names(out)))
+      out <- out[order(match(names(out), labels))]
+    out
   }
+  results <- by_label(results, results$label)
+  rownames(results) <- NULL
   errors <- do.call(rbind, lapply(outs, `[[`, "errors"))
+  errors <- by_label(errors, errors$label)
   rownames(errors) <- NULL
   sums <- do.call(rbind, lapply(outs, `[[`, "summary"))
   summary <- data.frame(

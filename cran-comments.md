@@ -1,4 +1,4 @@
-# cran-comments for GLOWpipeline 0.1.2
+# cran-comments for GLOWpipeline 0.2.0
 
 ## Test environment
 - R 4.3.3 on x86_64-conda-linux-gnu

@@ -68,7 +68,7 @@ withr::defer(unlink(.psr_pi_dir, recursive = TRUE), teardown_env())
   envelope <- list(
     model = b_model,
     metadata = list(glowr_version = as.character(utils::packageVersion("GLOWr"))),
-    format_version = "1.0")
+    format_version = 1L)   # the saver's numeric stamp (a string would warn as malformed)
   saveRDS(envelope, .psr_b_path)
   TRUE
 }, error = function(e) FALSE)

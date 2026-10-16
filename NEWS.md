@@ -1,3 +1,50 @@
+# GLOWpipeline 0.2.0
+
+Requires GLOWr 0.3.0.
+
+- **The fourth region type, `noncoding`.** `build_scan_regions("noncoding", chr, config,
+  gds_path = ...)` returns one regions table per gene-centric non-coding mask of
+  `config$noncoding_categories` (default the eight masks), built once from the chromosome's
+  annotations by `GLOWr::define_regions_noncoding()`, with the matching
+  `GLOWr::noncoding_filter()` map. The new trailing `gds_path` argument is required for this
+  type and ignored by the others. `run_scan_unit(region_type = "noncoding")` runs each
+  mask's table as it runs a coding category (the label check, `max_regions` and the
+  scheduler apply per table) and tags the rows with `category`. It writes the per-chromosome
+  table gene-first, ordered by the gene anchor of the new `noncoding_gene_anchor()`, so that a
+  gene's masks sit together although their candidate spans differ. Beside the table it writes
+  an errors CSV (zero rows when no cell errored) and a per-mask summary CSV (the cells
+  attempted, ok, skipped and errored) on every completed unit. `aggregate_coding_results()` serves the type through
+  `result_prefix`, `type_label`, `gene_anchor` and `family_alpha` (the across-family cutoff computed as
+  `family_alpha / n_all` over the tested cells, in place of the fixed `gw_alpha`). It
+  returns a `thresholds` table (every cutoff with its denominator and the published
+  constants of `reference_cutoffs` beside it) and a `completeness_table` with one row per
+  requested chromosome (its status, the cells, the tallies of the summary sidecar).
+  The coding defaults are unchanged.
+- **Size-aware scheduling of a unit's regions at `n_cores > 1`.** `run_scan_unit()` no longer
+  splits a chromosome's regions into blocks of 25 consecutive regions, which left most workers idle
+  while one of them held several neighboring heavy genes. It now reads every region's GDS record
+  count from the unit's variant index (no genotype read), takes the squared count as the region's
+  cost, runs every region whose cost reaches the unit's total cost divided by 8 times `n_cores`
+  in a block of its own, packs the remaining regions in decreasing cost into blocks of at most
+  25 regions whose summed cost stays within that threshold, and hands the blocks to the forked
+  workers heaviest first.
+  The merged output is restored to the regions table's order by label, so the written table, the
+  sidecars and the error table are the single-core ones. The gene, window and coding types are all
+  scheduled this way, and for the coding type each category's pass over the gene table is. The log
+  carries one scheduler line per regions table (regions, blocks, how many run alone, the heaviest
+  region, the budget) and one line per finished block (its region count, heaviest record count,
+  tally and wall time). On the 1000 Genomes chromosome 22 the table is identical to the 0.1.2 one
+  at four and at twenty cores. At twenty workers on a node allocated to the job alone, where the
+  old schedule's heaviest block set the wall time, the chromosome took 55 and 56 percent of the
+  0.1.2 time in two repeats; at four workers, where the old schedule's heaviest block was already
+  below the per-core share of the work, the two schedules were within about 1 percent of each
+  other.
+- **A repeated region label stops the run.** `run_scan_unit()` stops, at every `n_cores`, when a
+  unit's regions table carries a repeated label, naming the duplicates. The sidecars are keyed by
+  label and the error table carries only labels, so a duplicate already lost information silently.
+  The bundled gene table has no repeated symbol within a chromosome. A user-supplied gene list
+  through `config$resolved_gene_list` is what the check is for.
+
 # GLOWpipeline 0.1.2
 
 Requires GLOWr 0.2.3.
