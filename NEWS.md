@@ -1,3 +1,16 @@
+# GLOWpipeline 0.2.2
+
+Requires GLOWr 0.3.4.
+
+- **`debug_errors` threaded to the engine.** `glow_scan_chunk()` and `run_scan_unit()` take
+  `debug_errors` (default FALSE) and pass it to `GLOWr::glow_region_test()`, whose error
+  rows then carry the failing call and the stack of function names in their `message`.
+  Results unchanged. The GLOWr floor rises to 0.3.4, the first version that accepts the
+  argument.
+- The optimal-weight p-values of the set-based tests change with GLOWr 0.3.4 (its NEWS):
+  the `_N` and `_sparse` schemes of `GLOW_Fisher` and the omnibus columns. The equal-weight
+  tests, Burden and the single-variant scan are unchanged.
+
 # GLOWpipeline 0.2.1
 
 Requires GLOWr 0.3.0.

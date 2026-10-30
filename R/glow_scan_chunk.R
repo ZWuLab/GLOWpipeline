@@ -106,6 +106,9 @@
 #'   [GLOWr::glow_region_test()]: the M2 single-variant confounding correction
 #'   (\code{1/sqrt(inflation_factor)}) applied to each unit's Z before the GLOW
 #'   combination. \code{z_scale = 1} is a no-op.
+#' @param debug_errors Logical (default FALSE). Threaded to
+#'   [GLOWr::glow_region_test()]: when TRUE, the message of an error row carries the
+#'   failing call and the stack of function names. Results unchanged.
 #' @param region_summary Logical (default FALSE). Pass-through to
 #'   [GLOWr::glow_region_test()]: when TRUE the flat table gains 7 region-summary
 #'   columns (\code{n_collapsed_units}, \code{min_MAF}, \code{max_MAF},
@@ -172,7 +175,8 @@ glow_scan_chunk <- function(gds_path, regions,
                             progress_every = 0L,
                             progress_callback = NULL,
                             variant_index = NULL,
-                            verbose = 0) {
+                            verbose = 0,
+                            debug_errors = FALSE) {
 
   t0 <- proc.time()[["elapsed"]]
 
@@ -192,6 +196,9 @@ glow_scan_chunk <- function(gds_path, regions,
   if (!is.numeric(z_scale) || length(z_scale) != 1L || !is.finite(z_scale) ||
       z_scale <= 0) {
     stop("`z_scale` must be a single finite positive number.", call. = FALSE)
+  }
+  if (!is.logical(debug_errors) || length(debug_errors) != 1L || is.na(debug_errors)) {
+    stop("`debug_errors` must be TRUE or FALSE.", call. = FALSE)
   }
   if (!is.null(use_spa) &&
       (!is.logical(use_spa) || length(use_spa) != 1L || is.na(use_spa))) {
@@ -280,7 +287,8 @@ glow_scan_chunk <- function(gds_path, regions,
       return_evidence = isTRUE(output_policy$write_evidence),
       region_summary = region_summary,
       variant_index = variant_index,
-      verbose = verbose
+      verbose = verbose,
+      debug_errors = debug_errors
     )
 
     if (r$status %in% c("ok", "staar_skip_single")) {

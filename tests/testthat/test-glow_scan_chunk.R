@@ -67,13 +67,15 @@ set.seed(20260526)
 # Convenience wrapper binding the fixed fixtures.
 .scan <- function(regions, output_policy = glow_output_policy(),
                   staar_context = NULL, null_model = .nm,
-                  b_func = .b_func, b_model = NULL, z_scale = 1, use_spa = NULL) {
+                  b_func = .b_func, b_model = NULL, z_scale = 1, use_spa = NULL,
+                  debug_errors = FALSE) {
   glow_scan_chunk(.agds, regions, null_model, .pi_models, .feats, .meds,
                   b_func = b_func, b_model = b_model, filter_spec = .spec,
                   ld_threshold = 0.95, mac_threshold = 11L,
                   collapse_method = "mean", use_spa = use_spa, z_scale = z_scale,
                   output_policy = output_policy,
-                  staar_context = staar_context, verbose = 0)
+                  staar_context = staar_context, verbose = 0,
+                  debug_errors = debug_errors)
 }
 
 .SCHEMA <- c("label", "chr", "start", "end", "midpoint",
@@ -268,6 +270,26 @@ test_that("z_scale is threaded to the primitive (default 1 is a no-op)", {
   # and (as a uniform shrink) makes the omnibus no more significant.
   expect_false(isTRUE(all.equal(zc$results[, gcols], base$results[, gcols])))
   expect_true(all(zc$results$GLOW_Omni >= base$results$GLOW_Omni - 1e-12))
+})
+
+# ---- debug_errors passthrough ----
+
+test_that("debug_errors reaches glow_region_test(): the error rows carry the call and the stack", {
+  planted <- function(maf) stop("planted failure")
+  plain <- .scan(.reg_ok3, b_func = planted)
+  dbg   <- .scan(.reg_ok3, b_func = planted, debug_errors = TRUE)
+  # every region errors; the chunk reports them in its errors table (label, message)
+  expect_equal(plain$summary$n_error, nrow(.reg_ok3))
+  expect_equal(dbg$summary$n_error, nrow(.reg_ok3))
+  expect_equal(nrow(dbg$errors), nrow(.reg_ok3))
+  expect_true(all(plain$errors$message == "planted failure"))
+  expect_true(all(startsWith(dbg$errors$message, "planted failure [call: ")))
+  expect_true(all(grepl("stack: glow_region_test > ", dbg$errors$message, fixed = TRUE)))
+  # a successful scan is unchanged by the option
+  base <- .scan(.reg_ok3)
+  same <- .scan(.reg_ok3, debug_errors = TRUE)
+  expect_equal(same$results, base$results)
+  expect_error(.scan(.reg_ok3, debug_errors = NA), "debug_errors")
 })
 
 test_that("invalid z_scale is rejected before opening the GDS", {

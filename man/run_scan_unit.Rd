@@ -27,7 +27,8 @@ run_scan_unit(
   progress_every = 0L,
   logger = NULL,
   n_cores = NULL,
-  verbose = 0
+  verbose = 0,
+  debug_errors = FALSE
 )
 }
 \arguments{
@@ -95,6 +96,10 @@ Memory scales with the workers, since each holds its own genotype and LD
 matrices.}
 
 \item{verbose}{Integer threaded to the engine. Default 0.}
+
+\item{debug_errors}{Logical (default FALSE). Threaded to the engine and to
+\code{GLOWr::glow_region_test()}: when TRUE, the message of an error row carries the
+failing call and the stack of function names. Results unchanged.}
 }
 \value{
 Invisibly, a named list with \code{results} (the written flat table),

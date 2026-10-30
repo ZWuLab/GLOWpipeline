@@ -25,7 +25,8 @@ glow_scan_chunk(
   progress_every = 0L,
   progress_callback = NULL,
   variant_index = NULL,
-  verbose = 0
+  verbose = 0,
+  debug_errors = FALSE
 )
 }
 \arguments{
@@ -82,6 +83,10 @@ the index for this file (as \code{\link{run_scan_unit}} does) passes it
 to avoid a second build.}
 
 \item{verbose}{Integer (default 0). Threaded to the single-region test.}
+
+\item{debug_errors}{Logical (default FALSE). Threaded to
+\code{\link[GLOWr:glow_region_test]{GLOWr::glow_region_test()}}: when TRUE, the message of an error row carries the
+failing call and the stack of function names. Results unchanged.}
 }
 \value{
 A list with:

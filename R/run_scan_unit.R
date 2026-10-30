@@ -104,6 +104,9 @@
 #' @param staar_context A STAAR context or NULL (STAAR off). Default NULL.
 #' @param use_spa,z_scale Threaded to the engine (see
 #'   \code{\link{glow_scan_chunk}}). Defaults NULL / 1.
+#' @param debug_errors Logical (default FALSE). Threaded to the engine and to
+#'   \code{GLOWr::glow_region_test()}: when TRUE, the message of an error row carries the
+#'   failing call and the stack of function names. Results unchanged.
 #' @param max_regions Integer or NA. If not NA, cap the regions to the first
 #'   \code{max_regions} (smoke-test; the \code{--max-genes}/\code{--max-windows}
 #'   parallel). Default NA.
@@ -213,7 +216,8 @@ run_scan_unit <- function(gds_path,
                           use_spa = NULL, z_scale = 1,
                           max_regions = NA_integer_,
                           progress_every = 0L,
-                          logger = NULL, n_cores = NULL, verbose = 0) {
+                          logger = NULL, n_cores = NULL, verbose = 0,
+                          debug_errors = FALSE) {
 
   region_type <- match.arg(region_type, c("gene", "window", "coding", "noncoding"))
   log_msg <- if (is.null(logger)) function(...) invisible(NULL) else logger
@@ -328,7 +332,7 @@ run_scan_unit <- function(gds_path,
       b_func = b_func, b_model = b_model, filter_spec = filter_spec,
       ld_threshold = ld_threshold, mac_threshold = mac_threshold,
       collapse_method = collapse_method,
-      use_spa = use_spa, z_scale = z_scale,
+      use_spa = use_spa, z_scale = z_scale, debug_errors = debug_errors,
       region_summary = region_summary,
       output_policy = output_policy, staar_context = staar_context,
       progress_every = if (in_parent) progress_every else 0L,
