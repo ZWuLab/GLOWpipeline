@@ -278,3 +278,38 @@ test_that(".psr_check_qc_node() stops when every QC value of a chromosome is mis
   expect_error(GLOWpipeline:::.psr_check_qc_node(c("22" = g), qc_label = "annotation/filter"),
                "Every variant on chr 22")
 })
+
+# ---- The preprocessing settings: a missing field takes GLOWr's default, an invalid value fails
+
+test_that("a config without the preprocessing fields snapshots GLOWr's defaults", {
+  out <- tempfile("psr-out-"); withr::defer(unlink(out, recursive = TRUE))
+  cfg <- .psr_base_config("func")
+  rm("ld_threshold", "mac_threshold", "collapse_method", envir = cfg)
+  bnd <- prepare_scan_run(cfg, output_dir = out, chroms = 22L, config_path = NULL, verbose = 0)
+  d <- GLOWr::glow_preprocessing_defaults()
+  expect_identical(bnd$base_snapshot$ld_threshold,    d$ld_threshold)
+  expect_identical(bnd$base_snapshot$mac_threshold,   d$mac_threshold)
+  expect_identical(bnd$base_snapshot$collapse_method, d$collapse_method)
+})
+
+test_that("an invalid preprocessing value stops prepare_scan_run before any output", {
+  out <- tempfile("psr-out-"); withr::defer(unlink(out, recursive = TRUE))
+  cfg <- .psr_base_config("func"); cfg$ld_threshold <- 1.5
+  expect_error(prepare_scan_run(cfg, output_dir = out, chroms = 22L, config_path = NULL, verbose = 0),
+               "ld_threshold.*\\(0, 1\\]")
+  expect_false(dir.exists(out))
+  cfg <- .psr_base_config("func"); cfg$mac_threshold <- 10.5
+  expect_error(prepare_scan_run(cfg, output_dir = out, chroms = 22L, config_path = NULL, verbose = 0),
+               "mac_threshold.*whole number")
+  cfg <- .psr_base_config("func"); cfg$collapse_method <- "median"
+  expect_error(prepare_scan_run(cfg, output_dir = out, chroms = 22L, config_path = NULL, verbose = 0),
+               "collapse_method")
+})
+
+test_that(".resolve_preprocessing types its result and accepts 0 as the MAC threshold", {
+  r <- .resolve_preprocessing(0.95, 11, "sum")
+  expect_identical(r, list(ld_threshold = 0.95, mac_threshold = 11L, collapse_method = "sum"))
+  expect_identical(.resolve_preprocessing(NULL, 0L, NULL)$mac_threshold, 0L)
+  expect_error(.resolve_preprocessing(c(0.9, 0.95), 10, "mean"), "ld_threshold")
+  expect_error(.resolve_preprocessing(0.9, -1, "mean"), "mac_threshold")
+})

@@ -1,3 +1,19 @@
+# GLOWpipeline 0.2.3
+
+Requires GLOWr 0.3.5.
+
+- **The variant-preprocessing settings have one source.** `glow_scan_chunk()` defaults
+  `ld_threshold`, `mac_threshold` and `collapse_method` to `GLOWr::glow_preprocessing_defaults()`
+  (0.9 on the absolute correlation, 10, "mean"). `prepare_scan_run()` and `run_scan_unit()`
+  resolve a configuration's fields the same way. A missing field takes that default. An invalid
+  value (an LD threshold outside (0, 1], a negative or fractional MAC threshold, an unknown
+  collapse method) stops the run with a message naming the field before any output is written. Up to 0.2.2 a configuration without the fields passed `NULL` down to the engine,
+  which failed inside `GLOWr::filter_variants_ld()` after the null model was fitted. The
+  Stage-1 snapshot carries the resolved values. Results are unchanged for a configuration that
+  set the fields. The GLOWanalyses base configuration moves from 0.95 and 11 to these values in
+  GLOWanalyses 0.3.4 (its NEWS).
+- The GLOWr floor rises to 0.3.5, the first version with the defaults accessor.
+
 # GLOWpipeline 0.2.2
 
 Requires GLOWr 0.3.4.

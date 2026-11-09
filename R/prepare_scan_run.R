@@ -153,9 +153,15 @@ prepare_scan_run <- function(config, output_dir, chroms = 1:22,
   pheno_path      <- .psr_get(config, "pheno_path")
   pi_model_dir    <- .psr_get(config, "pi_model_dir")
   filter_spec     <- .psr_get(config, "filter_spec")
-  ld_threshold    <- .psr_get(config, "ld_threshold")
-  mac_threshold   <- .psr_get(config, "mac_threshold")
-  collapse_method <- .psr_get(config, "collapse_method")
+  # The three preprocessing settings: a missing field takes GLOWr's default, an invalid
+  # value stops here, before any output is written (scan_preprocessing.R).
+  pre <- .resolve_preprocessing(.psr_get(config, "ld_threshold"),
+                                .psr_get(config, "mac_threshold"),
+                                .psr_get(config, "collapse_method"),
+                                where = "the run configuration")
+  ld_threshold    <- pre$ld_threshold
+  mac_threshold   <- pre$mac_threshold
+  collapse_method <- pre$collapse_method
   pi_features     <- .psr_get(config, "pi_features")
   b_func          <- .psr_get(config, "b_func")
   b_model_path    <- .psr_get(config, "b_model_path")

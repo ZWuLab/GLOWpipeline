@@ -95,7 +95,9 @@
 #' @param null_model,pi_models,pi_features,reference_medians,b_func,b_model,filter_spec,ld_threshold,mac_threshold,collapse_method
 #'   Passed through to [GLOWr::glow_region_test()] for every window (exactly one
 #'   of \code{b_func}/\code{b_model}). \code{reference_medians} is the chunk
-#'   chromosome's cached annotation medians.
+#'   chromosome's cached annotation medians. The three preprocessing settings default
+#'   to [GLOWr::glow_preprocessing_defaults()] (0.9 on the absolute correlation, 10,
+#'   "mean"), the values the GLOWanalyses base configuration carries too.
 #' @param use_spa Logical or NULL (default NULL). Threaded to
 #'   [GLOWr::glow_region_test()]: selects GLOW's single-variant score statistics
 #'   (NULL = auto: SPA for binary, standard for continuous; TRUE = force SPA,
@@ -165,8 +167,10 @@
 glow_scan_chunk <- function(gds_path, regions,
                             null_model, pi_models, pi_features, reference_medians,
                             b_func = NULL, b_model = NULL,
-                            filter_spec, ld_threshold = 0.9, mac_threshold = 10L,
-                            collapse_method = "mean",
+                            filter_spec,
+                            ld_threshold = GLOWr::glow_preprocessing_defaults()$ld_threshold,
+                            mac_threshold = GLOWr::glow_preprocessing_defaults()$mac_threshold,
+                            collapse_method = GLOWr::glow_preprocessing_defaults()$collapse_method,
                             use_spa = NULL,
                             z_scale = 1,
                             region_summary = FALSE,

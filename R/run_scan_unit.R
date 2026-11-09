@@ -269,9 +269,15 @@ run_scan_unit <- function(gds_path,
   region_summary <- region_type %in% c("gene")
 
   # ---- Engine knobs (from config) ----
-  ld_threshold    <- .rsu_get(config, "ld_threshold")
-  mac_threshold   <- .rsu_get(config, "mac_threshold")
-  collapse_method <- .rsu_get(config, "collapse_method")
+  # A missing preprocessing field takes GLOWr's default; an invalid value stops here
+  # (scan_preprocessing.R). Stage 1 resolves the same way, so a snapshot carries values.
+  pre <- .resolve_preprocessing(.rsu_get(config, "ld_threshold"),
+                                .rsu_get(config, "mac_threshold"),
+                                .rsu_get(config, "collapse_method"),
+                                where = "the unit's configuration")
+  ld_threshold    <- pre$ld_threshold
+  mac_threshold   <- pre$mac_threshold
+  collapse_method <- pre$collapse_method
   output_format   <- .rsu_null_or(.rsu_get(config, "output_format"), "csv")
 
   # ---- The variant index: built once per unit ----
