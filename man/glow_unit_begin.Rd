@@ -71,6 +71,13 @@ Assumption: moving a folder to a name that is free is atomic, and fails when
 the name is taken by a folder that is not empty, which holds for POSIX file
 systems. Computational complexity: constant, plus the number of recorded files
 of a unit that runs again.
+
+The run records (this function, \code{\link[=glow_unit_complete]{glow_unit_complete()}}, \code{\link[=glow_unit_state]{glow_unit_state()}},
+\code{\link[=glow_unit_record]{glow_unit_record()}}, \code{\link[=glow_unit_release]{glow_unit_release()}}, \code{\link[=glow_lock]{glow_lock()}} and \code{\link[=glow_seed_unit]{glow_seed_unit()}})
+are supported on Linux and macOS, the systems on which the GLOWanalyses templates
+run. They are not supported on Windows: a record there keeps the full path of an
+output where it should hold the path below the folder of the unit, so a finished
+unit is not found complete.
 }
 \examples{
 \dontrun{

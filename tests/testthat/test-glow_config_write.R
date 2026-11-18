@@ -83,7 +83,34 @@ test_that("the base alone round-trips, nulls included", {
   expect_true(any(grepl("^  chroms: 1-22$", readLines(f))))            # the range form
 })
 
+test_that("a number of up to 15 significant digits reads back unchanged on every build", {
+  # A setting is such a number: 0.9, 1e-5, 2000. Its text has a mantissa below 2^53 and a
+  # power of ten that a double holds exactly, so R reads it with one correctly rounded
+  # division or product, with or without long double.
+  set.seed(20261118)
+  x <- c(0.1, 0.9, 0.05, 0.25, 2.5e-6, 1e-5, 5e-8, 1.036021238, 1e6, 3e9, 1e15, -7.25e-12, 0, -0, 2000, 22,
+         as.numeric(sprintf("%.6f", stats::runif(500))),                    # six decimals
+         as.numeric(sprintf("%.3e", 10^stats::runif(500, -8, 8))) *         # four digits over sixteen decades
+           sample(c(-1, 1), 500, replace = TRUE))
+  txt <- vapply(x, .gc_num_text, character(1))
+  expect_true(all(grepl(.gc_num_pattern, txt)))
+  expect_identical(as.numeric(txt), x)
+  expect_true(all(nchar(gsub("[^0-9]", "", sub("[eE].*$", "", txt))) <= 16L))   # no text of 17 digits among them
+  s <- gc_setup(withr::local_tempdir())
+  cfg <- read_glow_config(NULL, base = s$base, registry = s$registry, root = s$dir)
+  cfg$snv_set$weights <- x
+  expect_identical(gc_round_trip(s, cfg)$snv_set$weights, x)
+})
+
 test_that("every tested double reads back unchanged through a written file", {
+  # Seventeen significant digits identify a double, and the writer uses them when fewer do
+  # not. Whether the same double comes back is the reader's part, as.numeric(), and R
+  # converts a text of 17 digits, or a number near the limits of the type, to exactly the
+  # nearest double only where it computes in long double. A build without it (R on Apple
+  # silicon) can be one unit in the last place off and reads the largest double as infinite.
+  exact_reader <- isTRUE(capabilities("long.double")) &&
+    identical(as.numeric("1.7976931348623157e+308"), .Machine$double.xmax)
+  skip_if_not(exact_reader, "this build of R does not convert a text of 17 digits exactly")
   set.seed(20261116)
   x <- c(.Machine$double.xmin, .Machine$double.xmax, 5e-324, 1 + .Machine$double.eps, 1 - .Machine$double.eps / 2,
          0.1, 1 / 3, pi, 2.5e-6, 1e6, 3e9, 1e15, 123456789012345678, -7.25e-12, 0, -0,

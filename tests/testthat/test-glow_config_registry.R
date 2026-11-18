@@ -265,7 +265,9 @@ test_that("an R function is parsed, never run, and keeps its source text", {
   expect_identical(attr(f, "glow_source"), "function(maf) sqrt(maf * (1 - maf))")
   expect_equal(gc_conv("\"function(p) qnorm(p)\"", "{type: r_function}")$value(0.5), 0)   # stats is seen
   # text that is not exactly one function definition is refused without being evaluated
-  marker <- file.path(withr::local_tempdir(), "ran")
+  # forward slashes only: the path is written inside a double-quoted YAML text, where a
+  # backslash starts an escape
+  marker <- gsub("\\", "/", file.path(withr::local_tempdir(), "ran"), fixed = TRUE)
   for (code in c(sprintf("\"file.create('%s')\"", marker),
                  sprintf("\"local({ file.create('%s'); function(x) x })\"", marker),
                  sprintf("\"(function() { file.create('%s'); function(x) x })()\"", marker),

@@ -1,3 +1,24 @@
+# GLOWpipeline 0.3.1
+
+Tests and help pages only. No function changes, and results are those of 0.3.0. The public
+check of 0.3.0 passed on Ubuntu and failed on macOS and on Windows, in the three ways below.
+
+- **The run records are for Linux and macOS.** `glow_unit_begin()` and the functions around it
+  (`glow_unit_complete()`, `glow_unit_state()`, `glow_unit_record()`, `glow_unit_release()`,
+  `glow_lock()`, `glow_seed_unit()`) serve the workflow templates of GLOWanalyses, which run on
+  those systems. On Windows a record keeps the full path of an output where it should hold the
+  path below the folder of the unit, so a finished unit is not found complete there. The help
+  of `glow_unit_begin()` now says so, and the tests of the run records are skipped on Windows.
+- **A number read back from a written configuration.** `write_resolved_config()` writes a
+  number with the digits that identify it. Reading it back is R's own conversion of text to a
+  number, which is exact for a number of up to 15 significant digits on every build of R, and
+  for a number of 17 digits or near the limits of the type only where R computes in long
+  double. On Apple silicon such a number can come back one unit in the last place off. The
+  help page states this, and the test of those numbers runs where the conversion is exact. A
+  new test covers numbers of up to 15 digits, which is what a setting holds, on every build.
+- **A test of the loader wrote a Windows path into a quoted YAML text**, where its backslashes
+  are escapes. The test names its file with forward slashes. The loader is unchanged.
+
 # GLOWpipeline 0.3.0
 
 Requires R 4.0.0 or later (it was 3.5.0), GLOWr 0.3.5 or later, and the CRAN package `yaml`,

@@ -520,6 +520,13 @@ glow_dependency_differences <- function(recorded, current, seeded = FALSE) {
 #' systems. Computational complexity: constant, plus the number of recorded files
 #' of a unit that runs again.
 #'
+#' The run records (this function, [glow_unit_complete()], [glow_unit_state()],
+#' [glow_unit_record()], [glow_unit_release()], [glow_lock()] and [glow_seed_unit()])
+#' are supported on Linux and macOS, the systems on which the GLOWanalyses templates
+#' run. They are not supported on Windows: a record there keeps the full path of an
+#' output where it should hold the path below the folder of the unit, so a finished
+#' unit is not found complete.
+#'
 #' @examples
 #' \dontrun{
 #' h <- glow_unit_begin(folder, "scan", "chr21", dependencies)

@@ -4,6 +4,11 @@
 #   parts, the text and fingerprint of a dependency, the completion record, the
 #   overwrite guard, the lock and the seed record.
 
+# The run records are not supported on Windows. They hold the paths of a unit's files with
+# forward slashes below the unit's folder, take a lock by moving a folder, and tell a dead
+# owner by /proc or the scheduler. Each test calls this first.
+skip_without_run_records <- function() testthat::skip_on_os("windows")
+
 deps_of <- function(settings = c("snv_set.ld_threshold" = "0.90000000000000002"),
                     inputs = character(0), files = character(0),
                     versions = c(GFisher = "0.3.2", GLOWr = "0.3.6", GLOWpipeline = "0.3.0", GLOWanalyses = "0.4.0")) {
@@ -25,6 +30,7 @@ finish_unit <- function(folder, part = "scan", unit = "chr21", deps = deps_of(),
 }
 
 test_that("the table of parts is read and checked", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   f <- file.path(d, "parts.yml")
   good <- c(
@@ -127,6 +133,7 @@ test_that("the table of parts is read and checked", {
 })
 
 test_that("a setting's text separates values that differ in type, digits or order", {
+  skip_without_run_records()
   expect_false(glow_setting_text(5L) == glow_setting_text(5))
   expect_false(glow_setting_text(0.1 + 0.2) == glow_setting_text(0.3))
   expect_false(glow_setting_text(c("a", "b")) == glow_setting_text(c("b", "a")))
@@ -144,6 +151,7 @@ test_that("a setting's text separates values that differ in type, digits or orde
 })
 
 test_that("a fingerprint follows the content of a file and the listing of a folder", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   f <- file.path(d, "a.txt"); writeLines("one", f)
   first <- glow_file_fingerprint(f)
@@ -166,6 +174,7 @@ test_that("a fingerprint follows the content of a file and the listing of a fold
 })
 
 test_that("a fingerprint sees a change within one second, and identifies a set of files", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   tree <- file.path(d, "tree"); dir.create(tree)
   f <- file.path(tree, "a.txt")
@@ -195,6 +204,7 @@ test_that("a fingerprint sees a change within one second, and identifies a set o
 })
 
 test_that("a finished unit has a record that reads back, and a second run finds it complete", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   deps <- deps_of(settings = c("snv_set.ld_threshold" = "0.9", "shared.pi_features" = 'c("a b", "007", "N")',
                                "training.b_func" = "function text: function(maf) {\n  sqrt(maf) # \"quoted\" \\ back\n}"),
@@ -228,6 +238,7 @@ test_that("a finished unit has a record that reads back, and a second run finds 
 })
 
 test_that("a deleted output makes its unit, and only its unit, run again", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   finish_unit(d, unit = "chr21", file = "results/chr21.csv")
   finish_unit(d, unit = "chr22", file = "results/chr22.csv")
@@ -245,6 +256,7 @@ test_that("a deleted output makes its unit, and only its unit, run again", {
 })
 
 test_that("a record states which process produced the unit when the caller says so", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   deps <- deps_of()
   out <- file.path(d, "results", "chr21.csv"); dir.create(dirname(out)); writeLines("x", out)
@@ -269,6 +281,7 @@ test_that("a record states which process produced the unit when the caller says 
 })
 
 test_that("the overwrite guard refuses other dependencies, names them, and yields to --force", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   finish_unit(d)
   before <- glow_unit_record(d, "scan", "chr21")
@@ -354,6 +367,7 @@ test_that("the overwrite guard refuses other dependencies, names them, and yield
 })
 
 test_that("a unit whose input was produced again is out of date and runs again without a question", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   first <- deps_of(inputs = c(prepare = "generation-1", "annotate_favor.chr21" = "seed-abc"))
   finish_unit(d, deps = first)
@@ -385,6 +399,7 @@ test_that("a unit whose input was produced again is out of date and runs again w
 })
 
 test_that("a unit that does not finish leaves no record, and an output has to exist", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   h <- glow_unit_begin(d, "scan", "chr21", deps_of())
   expect_error(glow_unit_complete(h, file.path(d, "results", "absent.csv")), "did not produce")
@@ -398,6 +413,7 @@ test_that("a unit that does not finish leaves no record, and an output has to ex
 })
 
 test_that("an input that is replaced while a unit runs stops its record", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   deps <- deps_of(inputs = c(prepare = "generation-1", "annotate_favor.chr21" = "seed-abc"))
   h <- glow_unit_begin(d, "scan", "chr21", deps)
@@ -421,6 +437,7 @@ test_that("an input that is replaced while a unit runs stops its record", {
 })
 
 test_that("a folder among the outputs is recorded file by file", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   h <- glow_unit_begin(d, "prepare", NULL, deps_of())
   shared <- file.path(d, "shared"); dir.create(file.path(shared, "sub"), recursive = TRUE)
@@ -451,6 +468,7 @@ test_that("a folder among the outputs is recorded file by file", {
 })
 
 test_that("the files of an old record are deleted by their literal names and never through a link", {
+  skip_without_run_records()
   skip_on_os("windows")
   # (review 2026-11-16, second round) A recorded name with a `*` deleted what the pattern matched,
   # and a recorded folder that had become a link led the deletion to another place.
@@ -497,6 +515,7 @@ local_squeue <- function(lines, status = 0L, env = parent.frame()) {
 }
 
 test_that("two runs cannot hold one unit, and the lock of a run that is gone is taken over", {
+  skip_without_run_records()
   d <- withr::local_tempdir()
   withr::local_envvar(SLURM_JOB_ID = "")
   h <- glow_unit_begin(d, "scan", "chr21", deps_of())
@@ -551,6 +570,7 @@ test_that("two runs cannot hold one unit, and the lock of a run that is gone is 
 })
 
 test_that("a named lock is held by one call at a time", {
+  skip_without_run_records()
   d <- file.path(withr::local_tempdir(), "dataset")                          # the folder is created
   first <- glow_lock(d, "slurm-submission")
   expect_identical(basename(first$lock), "slurm-submission.lock.1")
@@ -566,6 +586,7 @@ test_that("a named lock is held by one call at a time", {
 })
 
 test_that("a scheduler that does not answer proves nothing about the owner of a lock", {
+  skip_without_run_records()
   skip_on_os("windows")
   d <- withr::local_tempdir()
   elsewhere <- c(host = "some-other-node", pid = "1", started = "1", slurm_job = "4242", since = "earlier", token = "t0")
@@ -596,6 +617,7 @@ test_that("a scheduler that does not answer proves nothing about the owner of a 
 })
 
 test_that("of two runs that find the same dead owner, one takes the lock, and a late one cannot take it from the new owner", {
+  skip_without_run_records()
   skip_if_not(dir.exists("/proc"), "needs /proc to tell a dead process")
   d <- withr::local_tempdir()
   dir.create(file.path(d, "records"))
@@ -625,6 +647,7 @@ test_that("of two runs that find the same dead owner, one takes the lock, and a 
 })
 
 test_that("a run that died while it took or held a lock does not block the next run", {
+  skip_without_run_records()
   skip_if_not(dir.exists("/proc"), "needs /proc to tell a dead process")
   d <- withr::local_tempdir()
   dir.create(file.path(d, "records"))
@@ -658,6 +681,7 @@ test_that("a run that died while it took or held a lock does not block the next 
 })
 
 test_that("a generation mark is new each time and leaves the random numbers alone", {
+  skip_without_run_records()
   set.seed(42); expected <- runif(3)
   set.seed(42)
   marks <- vapply(1:20, function(i) GLOWpipeline:::.rr_generation(), character(1))
@@ -670,6 +694,7 @@ test_that("a generation mark is new each time and leaves the random numbers alon
 })
 
 test_that("supplied files get a seed record that is compared on the settings they were built with", {
+  skip_without_run_records()
   src <- withr::local_tempdir(); d <- withr::local_tempdir()
   from <- file.path(src, c("model_1.rds", "model_2.rds")); writeLines("m1", from[1]); writeLines("m2", from[2])
   to <- file.path(d, "pi_models", basename(from))
@@ -711,6 +736,7 @@ test_that("supplied files get a seed record that is compared on the settings the
 })
 
 test_that("supplied files never replace the results of a run, a held unit, or files of unknown origin", {
+  skip_without_run_records()
   src <- withr::local_tempdir()
   from <- file.path(src, "b_model.rds"); writeLines("supplied", from)
   built_with <- c("training.b_method" = '"both"')
@@ -751,6 +777,7 @@ test_that("supplied files never replace the results of a run, a held unit, or fi
 })
 
 test_that("the package versions of a run are named", {
+  skip_without_run_records()
   v <- glow_run_versions("0.4.0")
   expect_identical(names(v), c("GFisher", "GLOWr", "GLOWpipeline", "GLOWanalyses"))
   expect_identical(v[["GLOWanalyses"]], "0.4.0")
@@ -758,6 +785,7 @@ test_that("the package versions of a run are named", {
 })
 
 test_that("a folder name with a wildcard reaches no file beside it", {
+  skip_without_run_records()
   # (review 2026-11-16, third round) unlink() expands *, ? and [ ] in a path. The release of a
   # lock in the folder `case*` removed the owner file of the lock in `case-other`, and the
   # deletion of a unit's files removed those of the other folder.

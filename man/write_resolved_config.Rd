@@ -34,6 +34,14 @@ mapping, a function as its source text, and text that could be taken for a
 number, a boolean or a null in quotes. A character that YAML cannot hold as it
 is, such as a control character, is written as an escape.
 
+Seventeen significant digits identify a double, so the text of a number is exact.
+Reading it back is R's conversion of text to a number. That conversion returns the
+same double for a number of up to 15 significant digits on every build of R, which
+covers a setting as a user writes it. For a number that needs 17 digits, or one
+near the largest or the smallest double, it is exact where R computes in long
+double (\code{capabilities("long.double")}) and can differ by one unit in the
+last place elsewhere, for example on Apple silicon.
+
 Every value is checked against the registered type of its setting before
 anything is written: the R type, whole numbers and the range of an integer,
 infinity, the allowed words, and the fields of a map. A value that was changed

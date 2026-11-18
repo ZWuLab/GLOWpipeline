@@ -1,7 +1,7 @@
 Package: GLOWpipeline
 Type: Package
 Title: Multi-Region Orchestration for GLOW Variant-Set Scans
-Version: 0.3.0
+Version: 0.3.1
 Date: 2026-11-18
 Authors@R: c(
     person("Ming", "Liu", email = "mliu5@wpi.edu", role = "aut"),
