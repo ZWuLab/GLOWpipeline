@@ -1,3 +1,54 @@
+# GLOWpipeline 0.3.0
+
+Requires R 4.0.0 or later (it was 3.5.0), GLOWr 0.3.5 or later, and the CRAN package `yaml`,
+which is new among the imports. The
+scan functions and their results are unchanged. This release adds the functions that the
+workflow templates of GLOWanalyses 0.4.0 use to read one YAML configuration, to place every
+output folder, and to keep a record of each unit of work. A user of GLOWanalyses meets them
+through its `glow` command and does not call them.
+
+- **One YAML configuration, checked against a registry of settings.** `read_glow_config()`
+  reads a configuration file and the files its `extends` lines name, down to a base file, and
+  returns every setting converted to its registered type. A setting that the registry does not
+  know is refused with the nearest name, a value of the wrong type with the type that is
+  expected, and a value outside a fixed list with the list. Every scalar is read as the text
+  the user wrote and converted by the type of its setting, so YAML's own guesses (a `no` read
+  as false, a version number read as a decimal) play no part. `write_base_config()` writes the
+  base file from the registry, each setting with its default and its description, and
+  `write_resolved_config()` writes what a run used.
+- **The output folders of a study.** `glow_layout()` gives, from the three names
+  `output_root`, `dataset` and `analysis`, the folder of the data of a dataset and of each step
+  of an analysis. `glow_absolute_paths()` makes the paths of a configuration absolute.
+- **Completion records.** A unit of work (a part of a step, or one chromosome or chunk of it)
+  writes a record when it has finished: the settings, the input files and the package versions
+  it depended on, and the files it wrote. `glow_unit_begin()` locks a unit and decides whether
+  it is complete, has to run, or would replace results made with other dependencies, which it
+  refuses without `force`. `glow_unit_complete()` writes the record, `glow_unit_state()` and
+  `glow_unit_record()` read it, and `glow_dependency_differences()` names what differs. A
+  record can name the process that produced the unit (`producer`, for example the job of a
+  scheduler), so that a caller that started a job can tell the record that this job wrote.
+  `glow_read_parts()` reads the table that says what each part of a workflow depends on, and
+  `glow_setting_text()`, `glow_file_fingerprint()` and `glow_run_versions()` give the three
+  kinds of dependency as text. `glow_seed_unit()` supplies shipped files in place of a run, with
+  a record of the settings they were built with.
+- **A lock that survives a run that died.** The lock of a unit records its owner (host, process
+  and SLURM job). It is taken over only when the owner is known to be gone, and two runs cannot
+  hold it together, also when one of them acts late. `glow_lock()` gives the same lock under a
+  name, which the SLURM mode of the `glow` command holds while it submits.
+- **The per-family QQ page draws at most one point per grid cell.**
+  `summarize_qq_and_lambdas()` drew one vector point per row for every test of its per-family
+  page. R's PDF device holds the drawing of a page in memory when it closes the page, about
+  0.24 GB per million points, so the page of a whole-genome window scan (2.67 million windows,
+  16 tests, 43 million points) took about 10 GB beside the table. The aggregation task of
+  such a run on Terra peaked at 14.8 GB on a 16 GB machine (reported by Alberto Brusati,
+  Landers lab, UMass Chan Medical School). With `thin = TRUE` (the default of the new
+  argument) the points of each test are mapped to the grid that `GLOWr::plot_qq()` uses, half
+  the marker's diameter to a cell, and one point per cell is drawn, the highest. The omnibus
+  page takes the same argument. The lambdas, the expected quantiles and the axes come from
+  the complete input, so the numbers and the RDS file are unchanged, and at the marker's
+  scale the picture is the full set's. On a synthetic table of that size each of the two
+  per-family pages went from 19.6 MB to 0.13 MB. `thin = FALSE` restores the previous drawing.
+
 # GLOWpipeline 0.2.3
 
 Requires GLOWr 0.3.5.

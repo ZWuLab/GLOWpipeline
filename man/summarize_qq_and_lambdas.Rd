@@ -19,7 +19,8 @@ summarize_qq_and_lambdas(
   palette_pch = c(16, 17, 15, 18, 8, 4),
   family_title = NULL,
   write_rds = TRUE,
-  verbose = TRUE
+  verbose = TRUE,
+  thin = TRUE
 )
 }
 \arguments{
@@ -69,6 +70,10 @@ to \code{"<rds_basename>_<label>.rds"}.}
 
 \item{verbose}{Logical. If \code{TRUE} (default), cats a timestamped line per
 written file.}
+
+\item{thin}{Logical (default \code{TRUE}). Draw at most one point per grid cell at the
+marker's scale, in the omnibus plot (passed to \code{\link[GLOWr]{plot_qq}}) and for
+each test of the per-family page (see Details). \code{FALSE} draws every point.}
 }
 \value{
 Invisibly, a list with \code{lambda_omni}, \code{lambdas} (named per
@@ -90,6 +95,17 @@ This helper does no row filtering; callers pass an already-filtered
 \code{df}. Per-test lambda is \code{\link[GLOWr]{compute_lambda_gc}} of each
 column (\code{NA} flows through, e.g. for a column with fewer than 50 non-NA
 p-values). The omnibus QQ uses \code{\link[GLOWr]{plot_qq}}.
+
+With \code{thin = TRUE} the points of each test are mapped to a grid over the plot
+region whose cell is half the marker's drawn diameter (about 57 cells per inch at the
+marker size used here), and one point per cell is drawn, the highest. Two points in one
+cell overlap at the marker's size, so at that scale the picture is the full set's; a
+vector PDF enlarged well beyond it shows the thinning. The lambdas, the expected
+quantiles and the axis limits are computed from the complete input. The thinning bounds
+the memory of the task as well as the file size: R's PDF device holds the drawing of a
+page in memory when it closes the page, about 0.24 GB per million points (measured with
+R 4.3 on Linux), and the per-family page holds one point per row of \code{df} for
+every test when nothing is thinned.
 }
 \seealso{
 \code{\link[GLOWr]{plot_qq}}, \code{\link[GLOWr]{compute_lambda_gc}}

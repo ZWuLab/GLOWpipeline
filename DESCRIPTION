@@ -1,8 +1,8 @@
 Package: GLOWpipeline
 Type: Package
 Title: Multi-Region Orchestration for GLOW Variant-Set Scans
-Version: 0.2.3
-Date: 2026-11-09
+Version: 0.3.0
+Date: 2026-11-18
 Authors@R: c(
     person("Ming", "Liu", email = "mliu5@wpi.edu", role = "aut"),
     person("Hong", "Zhang", email = "consistencyzhang@gmail.com", role = "aut"),
@@ -19,14 +19,15 @@ URL: https://zwulab.github.io/GLOWpipeline/, https://github.com/ZWuLab/GLOWpipel
 BugReports: https://github.com/ZWuLab/GLOWpipeline/issues
 License: GPL-3
 Encoding: UTF-8
-Depends: R (>= 3.5.0)
+Depends: R (>= 4.0.0)
 Imports: GLOWr (>= 0.3.5),
     SeqArray,
     grDevices,
     graphics,
     parallel,
     stats,
-    utils
+    utils,
+    yaml
 Suggests: STAAR,
     fst,
     testthat (>= 3.0.0),

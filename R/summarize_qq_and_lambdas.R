@@ -30,6 +30,17 @@
 #' column (\code{NA} flows through, e.g. for a column with fewer than 50 non-NA
 #' p-values). The omnibus QQ uses \code{\link[GLOWr]{plot_qq}}.
 #'
+#' With \code{thin = TRUE} the points of each test are mapped to a grid over the plot
+#' region whose cell is half the marker's drawn diameter (about 57 cells per inch at the
+#' marker size used here), and one point per cell is drawn, the highest. Two points in one
+#' cell overlap at the marker's size, so at that scale the picture is the full set's; a
+#' vector PDF enlarged well beyond it shows the thinning. The lambdas, the expected
+#' quantiles and the axis limits are computed from the complete input. The thinning bounds
+#' the memory of the task as well as the file size: R's PDF device holds the drawing of a
+#' page in memory when it closes the page, about 0.24 GB per million points (measured with
+#' R 4.3 on Linux), and the per-family page holds one point per row of \code{df} for
+#' every test when nothing is thinned.
+#'
 #' @param df data.frame of results, one row per analysis unit; must contain
 #'   every column in \code{test_columns} and \code{omni_test}.
 #' @param label Short string used as the filename / title suffix.
@@ -62,6 +73,9 @@
 #'   to \code{"<rds_basename>_<label>.rds"}.
 #' @param verbose Logical. If \code{TRUE} (default), cats a timestamped line per
 #'   written file.
+#' @param thin Logical (default \code{TRUE}). Draw at most one point per grid cell at the
+#'   marker's scale, in the omnibus plot (passed to \code{\link[GLOWr]{plot_qq}}) and for
+#'   each test of the per-family page (see Details). \code{FALSE} draws every point.
 #'
 #' @return Invisibly, a list with \code{lambda_omni}, \code{lambdas} (named per
 #'   \code{test_columns}), \code{n} (\code{nrow(df)}), and \code{paths}
@@ -89,7 +103,8 @@ summarize_qq_and_lambdas <- function(
     palette_pch = c(16, 17, 15, 18, 8, 4),
     family_title = NULL,
     write_rds = TRUE,
-    verbose = TRUE) {
+    verbose = TRUE,
+    thin = TRUE) {
 
   if (!is.data.frame(df))
     stop("`df` must be a data.frame")
@@ -99,6 +114,8 @@ summarize_qq_and_lambdas <- function(
     stop("`omni_test` must be a single string")
   if (!is.null(family_title) && !is.function(family_title))
     stop("`family_title` must be a function(fam) -> character, or NULL")
+  if (!is.logical(thin) || length(thin) != 1L || is.na(thin))
+    stop("`thin` must be TRUE or FALSE")
 
   if (is.null(test_columns)) {
     if (is.null(families))
@@ -149,7 +166,7 @@ summarize_qq_and_lambdas <- function(
                          if (!is.null(subtitle)) sprintf("; %s", subtitle)
                          else "")
   pdf(omni_path, width = 6, height = 6)
-  plot_qq(df, pvalue_col = omni_test, title = title_omni)
+  plot_qq(df, pvalue_col = omni_test, title = title_omni, thin = thin)
   dev.off()
 
   # ---- 2. Family grid (optional) ----
@@ -202,7 +219,14 @@ summarize_qq_and_lambdas <- function(
         if (length(v) == 0L) next
         obs_q  <- -log10(sort(v))
         this_e <- -log10((seq_len(length(obs_q)) - 0.5) / length(obs_q))
-        points(this_e, obs_q,
+        # At most one point per grid cell of this panel when `thin`, per test, so that
+        # every test keeps its own curve. The quantiles above are of the complete input.
+        keep <- if (thin) {
+          .thin_points(this_e, obs_q, .thin_cells(NULL, cex = 0.5))
+        } else {
+          rep(TRUE, length(obs_q))
+        }
+        points(this_e[keep], obs_q[keep],
                pch = test_pch[t], cex = 0.5, col = test_palette[t])
       }
       legend("topleft",
